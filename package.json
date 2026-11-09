@@ -1,0 +1,26 @@
+{
+  "name": "dsh-remote-hosts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Open remote dsh web instances in the right sidebar from the left sidebar panel list.",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  }
+}
