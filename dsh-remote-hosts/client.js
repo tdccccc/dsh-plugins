@@ -24,9 +24,10 @@ window.__ModuleLoader__.load({
       try {
         const nav = document.querySelector('nav');
         const rect = nav && nav.getBoundingClientRect ? nav.getBoundingClientRect() : null;
-        if (rect && rect.width > 40 && rect.left < 40) return Math.round(rect.right);
+        // The sidebar can collapse to a rail or disappear: follow its real edge.
+        if (rect && rect.left < 40) return Math.max(0, Math.round(rect.right));
       } catch {}
-      return 280;
+      return 0;
     };
 
     const show = (id) => {
@@ -82,10 +83,23 @@ window.__ModuleLoader__.load({
         React.useEffect(() => {
           if (!active) return undefined;
           const onKey = (event) => { if (event.key === 'Escape') backToLocal(); };
-          const onResize = () => setState({ ...state, inset: measureInset() });
-          window.addEventListener('keydown', onKey);
-          window.addEventListener('resize', onResize);
-          return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('resize', onResize); };
+          const resync = () => {
+            const inset = measureInset();
+            if (inset !== state.inset) setState({ ...state, inset });
+          };
+          let observer = null;
+          const nav = document.querySelector('nav');
+          if (nav && typeof ResizeObserver !== 'undefined') {
+            observer = new ResizeObserver(resync);
+            observer.observe(nav);
+          }
+          const timer = setInterval(resync, 400);
+          window.addEventListener('resize', resync);
+          return () => {
+            if (observer) observer.disconnect();
+            clearInterval(timer);
+            window.removeEventListener('resize', resync);
+          };
         }, [active && active.id]);
 
         return h('div', {
