@@ -169,6 +169,9 @@ window.__ModuleLoader__.load({
               key: server.id + ':' + (s.reload[server.id] || 0),
               src: server.url,
               title: server.label,
+              // The remote app copies file paths through navigator.clipboard, and a
+              // cross-origin frame only gets that API when the host delegates it.
+              allow: 'clipboard-write',
               style: {
                 flex: 1, width: '100%', border: 0, background: '#fff', minHeight: 0,
                 display: active && active.id === server.id ? 'block' : 'none',
