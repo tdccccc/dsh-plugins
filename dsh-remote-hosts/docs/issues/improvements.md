@@ -26,8 +26,10 @@
 
 ## O2 代理和 SSH 隧道不在仓库里
 
-- 它们在 `~/Documents/deepseek-harness/default-workspace/`，靠手动启动（实测：`ssh` 监听 27993，`node dsh-remote-proxy.mjs` 监听 27994）。
-- 它们挂掉时 iframe 只是一片空白，插件不知道也不提示。
+- 代理脚本在 `~/Documents/deepseek-harness/default-workspace/dsh-remote-proxy.mjs`。
+- 隧道和代理由两个 LaunchAgent 托管（实测）：`com.tiandc.dsh-tunnel-a100-146`（`ssh -L 27993`）和 `com.tiandc.dsh-proxy-a100-146`（监听 27994）。
+- 换一台机器或加一台主机，都要手工复制脚本、再写两个 plist。
+- 它们不可用时 iframe 只是一片空白，插件不知道也不提示。
 - 建议：见 `features.md` 的 F2 和 F3。
 
 ## O3 没有清理逻辑
