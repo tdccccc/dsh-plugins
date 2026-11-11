@@ -49,12 +49,28 @@ function bodyless(req) {
 // The same fence the remote dsh applies to its own API: loopback Host only, no
 // foreign Origin, no cross-site fetch. A missing Origin is a non-browser client
 // (curl, the proxy's own login), which still has to pass Host.
+//
+// The desktop shell page lives on the dsh-app scheme, so the frame it puts in
+// front of this proxy is cross-site by construction: a navigate-mode request
+// with dest iframe and no Origin. Allow exactly that shape, otherwise the
+// overlay only ever shows the refusal. Cross-site requests that can read or act
+// through the injected cookie (fetch, xhr, websocket, subresources) stay
+// refused; a cross-site navigation into the API is still stopped by the
+// upstream's own fence, which sees the forwarded Sec-Fetch-Site.
+const FRAME_DESTS = new Set(['iframe', 'frame']);
+
+function isFrameNavigation(headers) {
+  const mode = String((headers && headers['sec-fetch-mode']) || '').toLowerCase();
+  const dest = String((headers && headers['sec-fetch-dest']) || '').toLowerCase();
+  return mode === 'navigate' && FRAME_DESTS.has(dest);
+}
+
 export function checkRequest(headers) {
   const host = headers && headers.host;
   if (!host || !isLoopbackHost(hostnameOf(host))) return 'loopback host required';
   const self = new URL('http://' + host);
   const site = String((headers && headers['sec-fetch-site']) || '').toLowerCase();
-  if (site === 'cross-site') return 'cross-site request refused';
+  if (site === 'cross-site' && !isFrameNavigation(headers)) return 'cross-site request refused';
   const origin = headers && headers.origin;
   if (typeof origin === 'string' && origin) {
     let url;

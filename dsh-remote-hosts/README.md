@@ -30,7 +30,10 @@ when the host is unreachable. Tunnels are stopped when the plugin unloads.
 The proxy reads the launch token from the remote log over SSH, logs in, and
 attaches the cookie itself, so no LaunchAgent or manual `ssh -L` is needed. It
 only listens on 127.0.0.1 and refuses non-loopback Hosts, foreign Origins, and
-cross-site requests.
+cross-site requests. The frame navigation is the one exception: the desktop
+shell page runs on the `dsh-app://` scheme, so its iframe is cross-site by
+construction (navigate mode, `Sec-Fetch-Dest: iframe`). Cross-site fetches,
+XHR, WebSockets, and subresources are still refused.
 
 A server without `sshHost` is opened at its `url` as is (the old manual proxy).
 
