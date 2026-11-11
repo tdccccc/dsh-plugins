@@ -1,9 +1,9 @@
 {
   "name": "dsh-remote-hosts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Open remote dsh web instances in the right sidebar from the left sidebar panel list.",
+  "description": "Open remote dsh web instances in an overlay over the main area, with a managed ssh tunnel, live connection state, and settings sync.",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
@@ -18,8 +18,10 @@
       "immediately": true,
       "inject": [
         "@deepseek-ai/dsh-client-ui-sidebar",
-        "@deepseek-ai/dsh-client-ui-sidebar-right",
-        "@deepseek-ai/dsh-client-ui-layout"
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
       ]
     }
   },
