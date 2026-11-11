@@ -1001,7 +1001,10 @@ window.__ModuleLoader__.load({
       ctx.slots.inject('shell.overlay', () =>
         ctx.slots.register({ name: 'shell.overlay', id: 'remote-hosts-view', order: 90, label: () => ctx.locale.bind(NS)('overlay') }, RemoteView));
 
-      // Cmd/Ctrl+1..9 switches hosts even while the overlay is closed.
+      // Cmd/Ctrl+1..9 opens a host; the same shortcut on the host that is
+      // already on screen returns to the conversation. The layout store is the
+      // source of truth, so leaving through the sidebar or a session reset it
+      // without this handler having to track the overlay.
       ctx.effect(() => {
         const onKey = (event) => {
           if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
@@ -1009,7 +1012,12 @@ window.__ModuleLoader__.load({
           const server = match ? state.servers[Number(match[1]) - 1] : null;
           if (!server) return;
           event.preventDefault();
-          openServer(server.id);
+          const panelInfo = ctx.layout && ctx.layout.panelInfo;
+          const selected = panelInfo && typeof panelInfo.getSnapshot === 'function'
+            ? panelInfo.getSnapshot().activePanelId
+            : null;
+          if (selected === 'remote-hosts/' + server.id) backToLocal();
+          else openServer(server.id);
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
