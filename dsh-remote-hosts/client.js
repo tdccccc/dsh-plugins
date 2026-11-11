@@ -222,7 +222,17 @@ window.__ModuleLoader__.load({
         const nav = document.querySelector('nav');
         const rect = nav && nav.getBoundingClientRect ? nav.getBoundingClientRect() : null;
         // The sidebar can collapse to a rail or disappear: follow its real edge.
-        if (rect && rect.left < 40) return Math.max(0, Math.round(rect.right));
+        if (rect && rect.left < 40) {
+          // The nav is the panel list and stops at the sidebar's inline padding.
+          // The macOS collapse toggle is right-aligned in that strip, so the
+          // overlay has to start at the column's border box, not the nav's edge,
+          // or its opaque frame covers the padding under the toggle.
+          const column = nav.parentElement && nav.parentElement.getBoundingClientRect
+            ? nav.parentElement.getBoundingClientRect()
+            : null;
+          const right = column && column.right > rect.right ? column.right : rect.right;
+          return Math.max(0, Math.round(right));
+        }
       } catch {}
       return 0;
     };
