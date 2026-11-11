@@ -1,15 +1,17 @@
 #!/bin/sh
 # Mirror local dsh preferences and settings onto a remote host running dsh web.
 #
-#   ./dsh-sync.sh a100-146            # copy files only
-#   ./dsh-sync.sh a100-146 --restart  # copy, then restart the remote dsh-web unit
-#   ./dsh-sync.sh a100-146 --dry-run  # show the plan
+#   bin/sync.sh a100-146            # copy files only
+#   bin/sync.sh a100-146 --restart  # copy, then restart the remote dsh-web unit
+#   bin/sync.sh a100-146 --dry-run  # show the plan
 #
 # What travels: ~/.dsh/AGENTS.md, the profile patch layer (desktop -> web),
 # and the provider API keys that layer references.
+#
+# Progress goes to stdout; failures go to stderr so the plugin can show them.
 set -eu
 
-HOST=${1:?"usage: dsh-sync.sh <ssh-host> [--restart] [--dry-run]"}
+HOST=${1:?"usage: sync.sh <ssh-host> [--restart] [--dry-run]"}
 shift
 RESTART=0
 DRY=0
@@ -23,24 +25,45 @@ while [ $# -gt 0 ]; do
 done
 
 say() { printf '%s\n' "$*"; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+
 LOCAL_PATCH="$HOME/.dsh/profiles/desktop/cordis.patch.yml"
-[ -f "$LOCAL_PATCH" ] || { say "missing $LOCAL_PATCH"; exit 1; }
+[ -f "$LOCAL_PATCH" ] || die "missing $LOCAL_PATCH"
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# Desktop-only entries stay behind; everything else carries over verbatim.
-awk '
-  function flush() { if (block != "" && keep) printf "%s", block }
-  /^- id: / {
+# Cut the desktop patch into top-level entries. An entry starts with "- " in
+# column one and owns every following line until the next one.
+#   - insert: lists plugins installed on this machine; the remote host usually
+#     has none of them, so those entries are skipped and counted.
+#   - id: ui-settings-account is desktop-only and stays behind.
+awk -v skip_id=ui-settings-account -v count_file="$TMP/skipped" '
+  function flush() {
+    if (!have) return
+    if (drop) { skipped += 1 } else { printf "%s", buf }
+    have = 0; drop = 0; buf = ""
+  }
+  /^- / {
     flush()
-    id = $0; sub(/^- id: */, "", id)
-    keep = (id != "ui-settings-account")
-    block = $0 "\n"
+    have = 1
+    buf = $0 "\n"
+    if ($0 ~ /^- insert:/) { drop = 1; next }
+    if ($0 ~ /^- id:/) {
+      id = $0
+      sub(/^- id:[[:space:]]*/, "", id)
+      sub(/[[:space:]]+$/, "", id)
+      if (id == skip_id) drop = 1
+    }
     next
   }
-  { block = block $0 "\n" }
-  END { flush() }
+  {
+    # Comments and blank lines outside an entry belong to the local file header,
+    # which is regenerated below; keep everything inside an entry.
+    if (have) buf = buf $0 "\n"
+    else if ($0 !~ /^[[:space:]]*#/ && $0 !~ /^[[:space:]]*$/) printf "%s\n", $0
+  }
+  END { flush(); print skipped > count_file }
 ' "$LOCAL_PATCH" > "$TMP/patch.yml"
 
 {
@@ -62,9 +85,13 @@ for name in OPENCODE_GO_API_KEY VPS_CC_API_KEY; do
 done
 printf '%s' "$KEYS" > "$TMP/remote.env"
 
+keys=$(grep -c '=' "$TMP/remote.env" 2>/dev/null || true)
+skipped=$(cat "$TMP/skipped" 2>/dev/null || echo 0)
+
 say "== $HOST =="
 say "   patch:  $(wc -l < "$TMP/web-patch.yml" | tr -d ' ') lines"
-say "   keys:   $(grep -c '=' "$TMP/remote.env" 2>/dev/null || echo 0)"
+say "   keys:   ${keys:-0}"
+say "   insert: ${skipped:-0} skipped (not installed on the remote)"
 
 if [ -n "${PRINT_PATCH:-}" ]; then cat "$TMP/web-patch.yml"; fi
 
@@ -80,7 +107,10 @@ ssh "$HOST" 'chmod 600 ~/.dsh/remote.env'
 
 if [ "$RESTART" = 1 ]; then
   say "   restarting dsh-web"
-  ssh "$HOST" 'systemctl --user restart dsh-web && sleep 6 && systemctl --user is-active dsh-web'
+  # Report the unit state ourselves: a plain "is-active" failure prints to
+  # stdout and would otherwise reach the UI without any context.
+  ssh "$HOST" 'systemctl --user restart dsh-web; sleep 6; status=$(systemctl --user is-active dsh-web); printf "dsh-web: %s\n" "$status"; [ "$status" = active ] || exit 3'
+  say "   dsh-web restarted"
 else
   say "   files copied; pass --restart (or restart dsh-web) to apply"
 fi
