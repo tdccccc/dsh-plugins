@@ -56,6 +56,7 @@ window.__ModuleLoader__.load({
       retryConnect: 'Retry',
       reconnectFailed: 'Reconnect failed: {detail}',
       switchTitle: 'Switch to this host (⌘/Ctrl+{n})',
+      shortcutSwitch: 'Switch to remote host {n}',
       confirmRestart: 'Sync settings to {host} and restart the remote dsh-web?\n\nRestarting interrupts sessions running on the remote.',
       summary: 'Remote servers shown in the sidebar.',
       intro: 'Servers shown in the sidebar. The same list authorizes the sync route, so keep ids stable.',
@@ -113,6 +114,7 @@ window.__ModuleLoader__.load({
       retryConnect: '重试',
       reconnectFailed: '重连失败：{detail}',
       switchTitle: '切换到此主机（⌘/Ctrl+{n}）',
+      shortcutSwitch: '切换到远程主机 {n}',
       confirmRestart: '同步配置到 {host} 并重启远端 dsh-web？\n\n重启会中断远端正在运行的会话。',
       summary: '侧边栏中的远程服务器。',
       intro: '显示在侧边栏的服务器。同一份列表也决定同步接口允许的主机，请保持 id 稳定。',
@@ -897,6 +899,12 @@ window.__ModuleLoader__.load({
               key: server.id + ':' + (s.reload[server.id] || 0),
               src: frameSrc(server) || 'about:blank',
               title: server.label,
+              // The desktop keyboard bridge forwards native input from a focused
+              // iframe only when the frame carries one of its preview/browser
+              // markers and its name matches the focused frame, so host
+              // shortcuts keep working while the remote page has focus.
+              name: 'remote-hosts-' + server.id,
+              'data-html-preview': true,
               // The remote app copies file paths through navigator.clipboard, and a
               // cross-origin frame only gets that API when the host delegates it.
               allow: 'clipboard-write',
@@ -1002,26 +1010,51 @@ window.__ModuleLoader__.load({
         ctx.slots.register({ name: 'shell.overlay', id: 'remote-hosts-view', order: 90, label: () => ctx.locale.bind(NS)('overlay') }, RemoteView));
 
       // Cmd/Ctrl+1..9 opens a host; the same shortcut on the host that is
-      // already on screen returns to the conversation. The layout store is the
-      // source of truth, so leaving through the sidebar or a session reset it
-      // without this handler having to track the overlay.
-      ctx.effect(() => {
-        const onKey = (event) => {
-          if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
-          const match = /^([1-9])$/.exec(event.key);
-          const server = match ? state.servers[Number(match[1]) - 1] : null;
-          if (!server) return;
-          event.preventDefault();
-          const panelInfo = ctx.layout && ctx.layout.panelInfo;
-          const selected = panelInfo && typeof panelInfo.getSnapshot === 'function'
-            ? panelInfo.getSnapshot().activePanelId
-            : null;
-          if (selected === 'remote-hosts/' + server.id) backToLocal();
-          else openServer(server.id);
-        };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-      }, 'remote-hosts: host shortcuts');
+      // already on screen returns to the conversation. It goes through the
+      // platform registry instead of a raw keydown listener because the
+      // desktop keyboard bridge only forwards input from a focused iframe for
+      // registered commands; a DOM listener never sees those keys.
+      ctx.inject(['shortcuts'], (shortcutCtx) => {
+        shortcutCtx.effect(() => {
+          const disposers = [];
+          for (let index = 0; index < 9; index += 1) {
+            const digit = String(index + 1);
+            const binding = { code: 'Digit' + digit, modifiers: ['primary'] };
+            try {
+              disposers.push(shortcutCtx.shortcuts.register({
+                id: 'remote-hosts.switch-' + digit,
+                label: () => shortcutCtx.locale.bind(NS)('shortcutSwitch', { n: digit }),
+                aliases: ['remote host ' + digit, 'switch host ' + digit],
+                defaults: {
+                  'desktop:macos': binding,
+                  'desktop:windows': binding,
+                  'desktop:linux': binding,
+                },
+                regions: ['page', 'editable', 'terminal'],
+                modals: [],
+                resolve: () => {
+                  const server = state.servers[index];
+                  if (!server) return { status: 'pass' };
+                  const panelInfo = ctx.layout && ctx.layout.panelInfo;
+                  const selected = panelInfo && typeof panelInfo.getSnapshot === 'function'
+                    ? panelInfo.getSnapshot().activePanelId
+                    : null;
+                  return {
+                    status: 'handled',
+                    run: () => {
+                      if (selected === 'remote-hosts/' + server.id) backToLocal();
+                      else openServer(server.id);
+                    },
+                  };
+                },
+              }));
+            } catch (error) {
+              console.warn('[dsh-remote-hosts] could not register the host shortcut', error);
+            }
+          }
+          return () => disposers.forEach((dispose) => dispose());
+        }, 'remote-hosts: host shortcuts');
+      });
 
       // Reopen the host that was on screen when the page last unloaded, unless
       // the user left through the back button.
