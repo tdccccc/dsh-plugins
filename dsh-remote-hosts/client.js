@@ -18,6 +18,9 @@ window.__ModuleLoader__.load({
     const PROBE_ROUTE = '/api/remote-hosts/probe';
     const SERVICE_ROUTE = '/api/remote-hosts/service';
     const LOGS_ROUTE = '/api/remote-hosts/logs';
+    // The Host refuses a restart/stop while the remote wrote session files in
+    // its window; the browser turns that code into a second confirmation.
+    const ACTIVE_SESSION_CODE = 'active-sessions';
     const LAST_HOST_KEY = 'dsh-remote-hosts:last-host';
     const OPEN_KEY = 'dsh-remote-hosts:open';
     const readStore = (key) => { try { return window.localStorage.getItem(key); } catch { return null; } };
@@ -96,6 +99,9 @@ window.__ModuleLoader__.load({
       loadingLogs: 'Reading remote log…',
       logsFailed: 'Could not read the remote log: {detail}',
       confirmServiceRestart: 'Restart dsh-web on {host}?\n\nSessions running on the remote are interrupted.',
+      confirmActiveSessions: '{host} has {count} remote session(s) active in the last {minutes} minutes.{ids}\n\nContinuing interrupts them. Run anyway?',
+      activeSessionsIds: '\n\nSessions: {ids}',
+      activeSessionsBlocked: 'Stopped: {host} has {count} active remote session(s), nothing was changed.',
       restartingService: 'Restarting remote service…',
       serviceFailed: 'Service action failed: {detail}',
       serviceDone: 'Remote service on {host} restarted',
@@ -219,6 +225,9 @@ window.__ModuleLoader__.load({
       loadingLogs: '读取远端日志中…',
       logsFailed: '读取远端日志失败：{detail}',
       confirmServiceRestart: '重启 {host} 上的 dsh-web？\n\n会中断远端正在运行的会话。',
+      confirmActiveSessions: '{host} 最近 {minutes} 分钟内有 {count} 个活跃会话。{ids}\n\n继续会中断这些会话，仍要执行吗？',
+      activeSessionsIds: '\n\n会话：{ids}',
+      activeSessionsBlocked: '已停止：{host} 还有 {count} 个活跃会话，未做任何改动。',
       restartingService: '重启远端服务中…',
       serviceFailed: '服务操作失败：{detail}',
       serviceDone: '{host} 上的远端服务已重启',
@@ -955,10 +964,12 @@ window.__ModuleLoader__.load({
           if (!done || !response.ok || !done.ok) {
             return {
               ok: false,
+              code: done && done.code ? String(done.code) : '',
+              sessions: done && done.sessions && typeof done.sessions === 'object' ? done.sessions : null,
               detail: flat((done && done.error) || tailOf('stderr') || tailOf('stdout') || translate('httpStatus', { status: response.status })),
             };
           }
-          return { ok: true };
+          return { ok: true, code: '', sessions: null };
         };
 
         // Shared busy state and abort wiring; the caller writes the success
@@ -969,19 +980,47 @@ window.__ModuleLoader__.load({
           abortRef.current = controller;
           try {
             const result = await streamAction(route, body, controller);
-            setSyncState({
-              busy: false,
-              error: !result.ok,
-              text: result.ok ? success : translate(failure, { detail: result.detail }),
-            });
-            return result.ok;
+            // The guard answer is not a failure yet: the second confirmation
+            // decides, so leave the status line alone instead of flashing an
+            // error.
+            if (result.code === ACTIVE_SESSION_CODE) {
+              setSyncState({ busy: false, error: false, text: '' });
+            } else {
+              setSyncState({
+                busy: false,
+                error: !result.ok,
+                text: result.ok ? success : translate(failure, { detail: result.detail }),
+              });
+            }
+            return result;
           } catch (err) {
-            if (controller.signal.aborted) return false;
-            setSyncState({ busy: false, error: true, text: translate(failure, { detail: flat(err && err.message ? err.message : String(err)) }) });
-            return false;
+            if (controller.signal.aborted) return { ok: false, code: '', sessions: null, detail: '' };
+            const detail = flat(err && err.message ? err.message : String(err));
+            setSyncState({ busy: false, error: true, text: translate(failure, { detail }) });
+            return { ok: false, code: '', sessions: null, detail };
           } finally {
             if (abortRef.current === controller) abortRef.current = null;
           }
+        };
+
+        // Restart-like actions run unforced first. A refusal carrying the
+        // session summary asks a second time and only then resends with force,
+        // so the default path stays one click when the remote is idle.
+        const runGuarded = async (server, route, body, pending, failure, success) => {
+          const first = await runAction(route, body, pending, failure, success);
+          if (first.ok || first.code !== ACTIVE_SESSION_CODE) return first;
+          const sessions = first.sessions || {};
+          const count = Number(sessions.active) || 0;
+          const minutes = Number(sessions.window) || 0;
+          const ids = Array.isArray(sessions.ids) && sessions.ids.length
+            ? translate('activeSessionsIds', { ids: sessions.ids.join(', ') })
+            : '';
+          if (typeof window.confirm !== 'function'
+            || !window.confirm(translate('confirmActiveSessions', { host: server.label, count, minutes, ids }))) {
+            setSyncState({ busy: false, error: false, text: translate('activeSessionsBlocked', { host: server.label, count }) });
+            return first;
+          }
+          return runAction(route, { ...body, force: true }, pending, failure, success);
         };
 
         const sync = async (server, options) => {
@@ -990,7 +1029,8 @@ window.__ModuleLoader__.load({
           // Restarting drops whatever the remote is running; ask first.
           if (restart && typeof window.confirm === 'function'
             && !window.confirm(translate('confirmRestart', { host: server.label }))) return;
-          const ok = await runAction(
+          const result = await runGuarded(
+            server,
             SYNC_ROUTE,
             { host: server.id, restart, dryRun },
             dryRun ? translate('syncingPreview') : restart ? translate('syncingRestart') : translate('syncing'),
@@ -1001,7 +1041,7 @@ window.__ModuleLoader__.load({
                 ? translate('synced', { host: server.label })
                 : translate('syncedNoRestart', { host: server.label }),
           );
-          if (!ok) return;
+          if (!result.ok) return;
           if (restart && !dryRun) {
             reload(server.id);
             readProbe(server, true);
@@ -1016,7 +1056,8 @@ window.__ModuleLoader__.load({
           const to = s.localVersion ? translate('toVersion', { version: s.localVersion }) : '';
           if (typeof window.confirm === 'function'
             && !window.confirm(translate('confirmUpdate', { host: server.label, to }))) return;
-          const ok = await runAction(
+          const result = await runGuarded(
+            server,
             UPDATE_ROUTE,
             { host: server.id, restart: true },
             translate('updating'),
@@ -1025,7 +1066,7 @@ window.__ModuleLoader__.load({
               ? translate('updated', { host: server.label, version: s.localVersion })
               : translate('updatedLatest', { host: server.label }),
           );
-          if (!ok) return;
+          if (!result.ok) return;
           reload(server.id);
           pollStatus().catch(() => {});
           readProbe(server, true);
@@ -1066,14 +1107,15 @@ window.__ModuleLoader__.load({
           const doneKey = action === 'start' ? 'serviceStarted' : action === 'stop' ? 'serviceStopped' : 'serviceDone';
           if (typeof window.confirm === 'function'
             && !window.confirm(translate(confirmKey, { host: server.label }))) return;
-          const ok = await runAction(
+          const result = await runGuarded(
+            server,
             SERVICE_ROUTE,
             { host: server.id, action },
             translate(pendingKey),
             'serviceFailed',
             translate(doneKey, { host: server.label }),
           );
-          if (!ok) return;
+          if (!result.ok) return;
           if (action !== 'stop') reload(server.id);
           pollStatus().catch(() => {});
           readProbe(server, true);

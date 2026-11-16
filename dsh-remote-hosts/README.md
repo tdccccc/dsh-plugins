@@ -57,6 +57,8 @@ dsh-remote-hosts → Configure**, or in the profile patch:
 ```yaml
 - id: dsh-remote-hosts
   config:
+    # Minutes of recent session writes counted before a restart is refused.
+    sessionWindow: 10
     servers:
       - id: gpu-1
         label: GPU box
@@ -93,6 +95,10 @@ dsh-remote-hosts → Configure**, or in the profile patch:
 | `updateChannel` | Update target: empty mirrors this app's dsh version; otherwise an npm dist-tag (`latest`, `next`) or exact version. |
 | `sidebar` | Show the host as a row in the left sidebar (default true). Hidden hosts stay configured and openable from the settings card or the overlay switcher. The settings pin icon writes this field. |
 
+The plugin-level `sessionWindow` (minutes, 1–1440, default 10) is not a server
+field: it is the window the probe uses to decide whether the remote is busy. It
+is passed to `bin/remote.sh probe --sessions-window N`.
+
 In the app the same settings are a compact card list:
 
 - a card is added with one click and needs only a name plus **SSH-managed**
@@ -117,8 +123,9 @@ The overlay's actions menu and the scripts share one behavior:
   restart the unit, then reload the frame. A per-row `updateChannel` overrides
   the "same as this app" default.
 - **检测远端** — `bin/remote.sh probe`: one JSON summary with OS, dsh version,
-  install path, node, service state/pid, port HTTP status and log token count.
-  Cached for a minute; the Host also returns it in the status payload.
+  install path, node, service state/pid, port HTTP status, log token count and
+  recent session activity (`sessions`: active count, files, newest age, up to
+  two ids). Cached for a minute; the Host also returns it in the status payload.
 - **重启/启动/停止远端服务** — `bin/remote.sh service restart|start|stop`: act
   on the unit and wait for it to settle. Start/stop appear once a check reports
   whether the service is currently active.
@@ -126,13 +133,20 @@ The overlay's actions menu and the scripts share one behavior:
   shown in the same panel as streaming actions.
 - A failure shows the host's one-line summary (timeout, exit code, or the last
   lines of output) instead of a bare HTTP code.
+- **Active-session guard** — before an update, a restarting sync, or a service
+  restart/stop, the Host forces a fresh probe of `~/.dsh/sessions` (the top-level
+  `sessionWindow`, default 10 minutes). When a session wrote a file inside that
+  window the request stops with `code: "active-sessions"` plus the count and ids,
+  and nothing runs. The overlay shows a second confirmation; choosing *run
+  anyway* resends the request with `force: true`. An idle remote stays a
+  one-click action, and an unreachable probe does not add a second step.
 
 Scripts run without the UI too:
 
 ```sh
 bin/sync.sh a100-146 --restart --profile web --unit dsh-web --kind systemd-user
 bin/update.sh a100-146 --version 0.2.2-rc.3 --unit dsh-web --port 27993 --dry-run
-bin/remote.sh a100-146 probe
+bin/remote.sh a100-146 probe --sessions-window 10
 bin/remote.sh a100-146 logs --lines 50
 bin/remote.sh a100-146 service restart --dry-run
 ```

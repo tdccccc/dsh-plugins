@@ -20,7 +20,7 @@ set -eu
 
 usage() {
   printf '%s\n' \
-    'usage: remote.sh <ssh-host> probe   [--port N] [--unit U] [--kind KIND] [--log PATH]' \
+    'usage: remote.sh <ssh-host> probe   [--port N] [--unit U] [--kind KIND] [--log PATH] [--sessions-window N]' \
     '       remote.sh <ssh-host> service <start|stop|restart> [--port N] [--unit U] [--kind KIND] [--dry-run]' \
     '       remote.sh <ssh-host> logs    [--port N] [--log PATH] [--lines N]' \
     'KIND is systemd-user (default), launchd-user, command, or external.' >&2
@@ -41,6 +41,7 @@ LOG=
 LINES=200
 DRY=0
 ACTION=
+SESSION_WINDOW=10
 
 case "$CMD" in
   probe|logs) ;;
@@ -96,6 +97,12 @@ while [ $# -gt 0 ]; do
       [ "$CMD" = service ] || { printf -- '--dry-run is not valid for %s\n' "$CMD" >&2; usage; }
       DRY=1
       ;;
+    --sessions-window)
+      [ "$CMD" = probe ] || { printf -- '--sessions-window is not valid for %s\n' "$CMD" >&2; usage; }
+      shift
+      [ $# -gt 0 ] || { printf '%s\n' '--sessions-window needs a value' >&2; usage; }
+      SESSION_WINDOW=$1
+      ;;
     *) printf 'unknown option: %s\n' "$1" >&2; usage ;;
   esac
   shift
@@ -119,6 +126,10 @@ case "$LINES" in
   ''|0*|*[!0-9]*) printf 'bad lines: %s\n' "$LINES" >&2; exit 2 ;;
 esac
 [ "$LINES" -le 100000 ] || { printf 'bad lines: %s\n' "$LINES" >&2; exit 2; }
+case "$SESSION_WINDOW" in
+  ''|0*|*[!0-9]*) printf 'bad session window: %s\n' "$SESSION_WINDOW" >&2; exit 2 ;;
+esac
+[ "$SESSION_WINDOW" -le 1440 ] || { printf 'bad session window: %s\n' "$SESSION_WINDOW" >&2; exit 2; }
 if [ -n "$LOG" ]; then
   case "$LOG" in
     -*) printf 'bad log path: %s\n' "$LOG" >&2; exit 2 ;;
@@ -158,7 +169,7 @@ expand_log() {
 
 MODE=$1
 case "$MODE" in
-  probe) PORT=$2; UNIT=$3; KIND=$4; LOG=$5 ;;
+  probe) PORT=$2; UNIT=$3; KIND=$4; LOG=$5; SESSIONS_WINDOW=${6:-10} ;;
   logs) PORT=$2; LOG=$3; LINES=$4 ;;
   service) ACTION=$2; PORT=$3; UNIT=$4; KIND=$5; PORT_SET=$6 ;;
   *) die "unknown payload mode: $MODE" ;;
@@ -386,6 +397,71 @@ probe)
   emit LOG_PATH "$LOG_PATH_R"
   emit LOG_EXISTS "$LOG_EXISTS_R"
   emit LOG_TOKENS "$LOG_TOKENS_R"
+
+  # -- sessions ------------------------------------------------------------
+  # dsh stores sessions as ~/.dsh/sessions/<workspace>/<session-id>/<files>.
+  # A file written inside the window means that session was active recently;
+  # the local side uses the count and the ids to warn before it restarts the
+  # unit. A missing or unreadable store reports zero instead of failing probe.
+  SESSIONS_DIR_R="$HOME/.dsh/sessions"
+  SESSIONS_ACTIVE_R=0
+  SESSIONS_FILES_R=0
+  SESSIONS_LATEST_AGE_R=null
+  SESSIONS_IDS_R=
+  SESSIONS_IDS_JSON_R=
+  if [ -d "$SESSIONS_DIR_R" ]; then
+    RECENT_R=$(find "$SESSIONS_DIR_R" -type f -mmin -"$SESSIONS_WINDOW" 2>/dev/null || true)
+    if [ -n "$RECENT_R" ]; then
+      SESSIONS_FILES_R=$(printf '%s\n' "$RECENT_R" | sed '/^$/d' | wc -l | tr -d ' ')
+      SESSIONS_SUMMARY_R=$(printf '%s\n' "$RECENT_R" | awk -v base="$SESSIONS_DIR_R/" '
+        {
+          path = $0
+          if (index(path, base) == 1) path = substr(path, length(base) + 1)
+          n = split(path, part, "/")
+          if (n >= 3) id = part[2]
+          else if (n >= 2) id = part[1]
+          else next
+          gsub(/[^A-Za-z0-9._-]/, "", id)
+          if (id == "" || id in seen) next
+          seen[id] = 1
+          ids[count++] = id
+        }
+        END {
+          print count + 0
+          if (count == 0) { print ""; print ""; exit }
+          if (count == 1) { print ids[0]; printf "\"%s\"\n", ids[0]; exit }
+          print ids[0] "," ids[1]
+          printf "\"%s\",\"%s\"\n", ids[0], ids[1]
+        }')
+      SESSIONS_ACTIVE_R=$(printf '%s\n' "$SESSIONS_SUMMARY_R" | sed -n '1p')
+      SESSIONS_IDS_R=$(printf '%s\n' "$SESSIONS_SUMMARY_R" | sed -n '2p')
+      SESSIONS_IDS_JSON_R=$(printf '%s\n' "$SESSIONS_SUMMARY_R" | sed -n '3p')
+      # ls -t over the matched files names the freshest write without relying
+      # on GNU-only find -printf.
+      NEWEST_R=$(printf '%s\n' "$RECENT_R" | sed '/^$/d' | tr '\n' '\0' | xargs -0 ls -td 2>/dev/null | head -1 || true)
+      if [ -n "$NEWEST_R" ]; then
+        NOW_R=$(date +%s 2>/dev/null || true)
+        MTIME_R=$(stat -c %Y "$NEWEST_R" 2>/dev/null || stat -f %m "$NEWEST_R" 2>/dev/null || true)
+        case "$NOW_R" in ''|*[!0-9]*) ;; *)
+          case "$MTIME_R" in ''|*[!0-9]*) ;;
+            *) AGE_R=$(( (NOW_R - MTIME_R) / 60 ))
+               if [ "$AGE_R" -lt 0 ]; then AGE_R=0; fi
+               SESSIONS_LATEST_AGE_R=$AGE_R ;;
+          esac ;;
+        esac
+      fi
+    fi
+  fi
+  case "$SESSIONS_ACTIVE_R" in ''|*[!0-9]*) SESSIONS_ACTIVE_R=0 ;; esac
+  case "$SESSIONS_FILES_R" in ''|*[!0-9]*) SESSIONS_FILES_R=0 ;; esac
+  case "$SESSIONS_LATEST_AGE_R" in ''|*[!0-9]*) SESSIONS_LATEST_AGE_R=null ;; esac
+  emit SESSIONS_DIR "$SESSIONS_DIR_R"
+  emit SESSIONS_WINDOW "$SESSIONS_WINDOW"
+  emit SESSIONS_ACTIVE "$SESSIONS_ACTIVE_R"
+  emit SESSIONS_FILES "$SESSIONS_FILES_R"
+  emit SESSIONS_LATEST_AGE "$SESSIONS_LATEST_AGE_R"
+  emit SESSIONS_IDS "$SESSIONS_IDS_R"
+  emit SESSIONS_IDS_JSON "$SESSIONS_IDS_JSON_R"
   exit 0
   ;;
 esac
@@ -584,7 +660,7 @@ do_probe() {
   OUT=
   RC=0
   OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" \
-    "sh -s -- probe '$PORT' '$UNIT' '$KIND' '$LOG'" \
+    "sh -s -- probe '$PORT' '$UNIT' '$KIND' '$LOG' '$SESSION_WINDOW'" \
     < "$TMP/payload.sh" 2>"$TMP/ssh.err") || RC=$?
 
   if ! printf '%s\n' "$OUT" | grep -q '^dsh-probe/1$'; then
@@ -613,6 +689,13 @@ do_probe() {
   LOG_PATH_R=
   LOG_EXISTS=false
   LOG_TOKENS=null
+  SESSIONS_DIR_R=
+  SESSIONS_WINDOW_R=$SESSION_WINDOW
+  SESSIONS_ACTIVE=0
+  SESSIONS_FILES=0
+  SESSIONS_LATEST_AGE=null
+  SESSIONS_IDS=
+  SESSIONS_IDS_JSON=
 
   if [ "$RC" -ne 0 ]; then
     add_warn "ssh exited $RC; findings may be incomplete"
@@ -642,6 +725,13 @@ do_probe() {
       LOG_PATH) LOG_PATH_R=$VALUE ;;
       LOG_EXISTS) LOG_EXISTS=$VALUE ;;
       LOG_TOKENS) LOG_TOKENS=$VALUE ;;
+      SESSIONS_DIR) SESSIONS_DIR_R=$VALUE ;;
+      SESSIONS_WINDOW) SESSIONS_WINDOW_R=$VALUE ;;
+      SESSIONS_ACTIVE) SESSIONS_ACTIVE=$VALUE ;;
+      SESSIONS_FILES) SESSIONS_FILES=$VALUE ;;
+      SESSIONS_LATEST_AGE) SESSIONS_LATEST_AGE=$VALUE ;;
+      SESSIONS_IDS) SESSIONS_IDS=$VALUE ;;
+      SESSIONS_IDS_JSON) SESSIONS_IDS_JSON=$VALUE ;;
       WARNING) add_warn "$VALUE" ;;
     esac
   done <<EOF
@@ -656,6 +746,11 @@ EOF
   case "$LOG_TOKENS" in ''|*[!0-9]*) LOG_TOKENS=null ;; esac
   if [ -z "$SVC_STATE" ]; then SVC_STATE=unknown; fi
   if [ -z "$LOG_PATH_R" ]; then LOG_PATH_R="~/.dsh/web-$PORT.log"; fi
+  case "$SESSIONS_WINDOW_R" in ''|*[!0-9]*) SESSIONS_WINDOW_R=$SESSION_WINDOW ;; esac
+  case "$SESSIONS_ACTIVE" in ''|*[!0-9]*) SESSIONS_ACTIVE=0 ;; esac
+  case "$SESSIONS_FILES" in ''|*[!0-9]*) SESSIONS_FILES=0 ;; esac
+  case "$SESSIONS_LATEST_AGE" in ''|*[!0-9]*) SESSIONS_LATEST_AGE=null ;; esac
+  if [ -z "$SESSIONS_DIR_R" ]; then SESSIONS_DIR_R="~/.dsh/sessions"; fi
 
   E_HOST=$(json_escape "$H_NAME")
   E_OS=$(json_escape "$OS_NAME")
@@ -669,11 +764,13 @@ EOF
   E_NODE_VER=$(json_escape "$NODE_VER")
   E_NODE_BIN=$(json_escape "$NODE_BIN_R")
   E_LOG_PATH=$(json_escape "$LOG_PATH_R")
+  E_SESSIONS_DIR=$(json_escape "$SESSIONS_DIR_R")
 
-  printf '{"ok":true,"info":{"hostname":"%s","os":"%s","service":{"kind":"%s","unit":"%s","state":"%s","active":%s,"pid":%s},"dsh":{"version":"%s","bin":"%s","install":{"kind":"%s","prefix":"%s"},"node":{"version":"%s","bin":"%s"}},"port":{"number":%s,"listening":%s,"http":"%s"},"log":{"path":"%s","exists":%s,"tokens":%s},"warnings":[%s]}}\n' \
+  printf '{"ok":true,"info":{"hostname":"%s","os":"%s","service":{"kind":"%s","unit":"%s","state":"%s","active":%s,"pid":%s},"dsh":{"version":"%s","bin":"%s","install":{"kind":"%s","prefix":"%s"},"node":{"version":"%s","bin":"%s"}},"port":{"number":%s,"listening":%s,"http":"%s"},"log":{"path":"%s","exists":%s,"tokens":%s},"sessions":{"dir":"%s","window":%s,"active":%s,"files":%s,"latestAge":%s,"ids":[%s]},"warnings":[%s]}}\n' \
     "$E_HOST" "$E_OS" "$E_KIND" "$E_UNIT" "$E_SVC_STATE" "$SVC_ACTIVE" "$SVC_PID" \
     "$E_DSH_VER" "$E_DSH_BIN" "$E_INST_KIND" "$E_INST_PREFIX" "$E_NODE_VER" "$E_NODE_BIN" \
-    "$PORT" "$PORT_LISTEN" "$PORT_HTTP" "$E_LOG_PATH" "$LOG_EXISTS" "$LOG_TOKENS" "$WARN_JSON"
+    "$PORT" "$PORT_LISTEN" "$PORT_HTTP" "$E_LOG_PATH" "$LOG_EXISTS" "$LOG_TOKENS" \
+    "$E_SESSIONS_DIR" "$SESSIONS_WINDOW_R" "$SESSIONS_ACTIVE" "$SESSIONS_FILES" "$SESSIONS_LATEST_AGE" "$SESSIONS_IDS_JSON" "$WARN_JSON"
   return 0
 }
 

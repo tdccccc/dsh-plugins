@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Schema from '@deepseek-ai/schemastery';
 import { configuredServers } from './lib/config.js';
+import { recentSessions, sessionWindowMinutes } from './lib/sessions.js';
 import { Tunnel } from './lib/tunnel.js';
 import { Proxy } from './lib/proxy.js';
 
@@ -54,9 +55,13 @@ export const Config = Schema.object({
     .default([])
     .loose()
     .volatile(),
+  // Minutes of recent session writes the probe counts before a restart is
+  // allowed to interrupt a remote session.
+  sessionWindow: Schema.natural().min(1).max(1440).default(10),
 }).i18n({
   en: {
     $desc: 'Remote dsh servers shown in the sidebar; the same list authorizes the update and service routes.',
+    sessionWindow: 'Minutes of recent session activity counted by the remote probe; a restart or stop is refused while a session wrote inside that window.',
     servers: {
       $desc: 'Each server needs a unique id and a display label. With sshHost the plugin owns the tunnel and proxy; without it the url is opened as is.',
       id: 'Stable identifier used in panel ids and sync requests: letters, digits, and dashes, up to 63 characters.',
@@ -75,6 +80,7 @@ export const Config = Schema.object({
   },
   zh: {
     $desc: '侧边栏中的远程 dsh 服务器；同一份列表也决定更新与服务接口允许的主机。',
+    sessionWindow: '远端 probe 统计最近多少分钟内的会话活动；窗口内有写入时，重启或停止操作会被拦截。',
     servers: {
       $desc: '每台服务器需要唯一的 id 和显示名称。填写 sshHost 后由插件管理隧道和代理；不填则直接打开 url。',
       id: '用于面板 id 和同步请求的稳定标识：字母、数字和连字符，最多 63 个字符。',
@@ -258,9 +264,10 @@ function parseJsonLine(stdout) {
 // One configured host: its tunnel is the only upstream the proxy ever sees, so
 // the connection state is the worse of the two halves.
 class ServerLink {
-  constructor(server) {
+  constructor(server, options = {}) {
     this.server = server;
     this.startError = '';
+    this.sessionWindow = typeof options.sessionWindow === 'function' ? options.sessionWindow : () => 10;
     // Last probe result (service/version/log health) is cached by time, not by
     // connection state: it only needs a fresh SSH read to refresh.
     this.probe = { at: 0, info: null, error: '', pending: null };
@@ -316,6 +323,7 @@ class ServerLink {
     const args = [REMOTE_SCRIPT, server.sshHost, 'probe', '--port', String(server.remotePort), '--kind', server.serviceKind];
     if (server.serviceUnit) args.push('--unit', server.serviceUnit);
     if (server.remoteLog) args.push('--log', server.remoteLog);
+    args.push('--sessions-window', String(this.sessionWindow()));
     const pending = runScript(args, PROBE_TIMEOUT_MS).then(
       ({ error, stdout, stderr }) => {
         const payload = parseJsonLine(stdout);
@@ -428,7 +436,7 @@ export function apply(ctx, config) {
         links.delete(server.id);
         existing.stop().catch(() => {});
       }
-      const link = new ServerLink(server);
+      const link = new ServerLink(server, { sessionWindow: () => sessionWindowMinutes(config) });
       links.set(server.id, link);
       link.start().catch(() => {});
     }
@@ -480,6 +488,28 @@ export function apply(ctx, config) {
     });
   };
 
+  // Restarting or stopping the unit kills whatever runs on the remote. A fresh
+  // probe (not the cached one) is read before those actions so a session that
+  // just wrote a file cannot slip in; an unreachable probe stays out of the
+  // way, because the action itself reports the connection failure.
+  const interruptWarning = async (server) => {
+    if (!server.sshHost) return null;
+    const link = links.get(server.id);
+    if (!link) return null;
+    const result = await link.probeInfo(true);
+    if (result.error || !result.info) return null;
+    return recentSessions(result.info, sessionWindowMinutes(config));
+  };
+
+  // The browser turns this code into the second "run anyway" confirmation and
+  // resends the request with force: true.
+  const interrupted = (server, sessions) => jsonResponse({
+    ok: false,
+    code: 'active-sessions',
+    sessions,
+    error: server.label + ' has ' + sessions.active + ' session(s) active in the last ' + sessions.window + ' minutes',
+  }, 409);
+
   // Tunnels and proxies are effects of this fiber: an unload disposes them, and
   // nothing survives as an orphan process or a bound port.
   ctx.effect(() => {
@@ -528,6 +558,11 @@ export function apply(ctx, config) {
 
       const restart = payload.restart !== false;
       const dryRun = payload.dryRun === true;
+      reconcile();
+      if (restart && !dryRun && payload.force !== true) {
+        const sessions = await interruptWarning(server);
+        if (sessions) return interrupted(server, sessions);
+      }
       const args = [SCRIPT, server.sshHost || server.id];
       // A managed host carries its own service descriptor so the same script
       // works for another unit or profile; an unmanaged row has no target.
@@ -554,6 +589,11 @@ export function apply(ctx, config) {
       if (!server) return jsonResponse({ ok: false, error: 'unknown host: ' + host }, 400);
       // Updating needs ssh; a URL-only host is somebody else's install.
       if (!server.sshHost) return jsonResponse({ ok: false, error: 'host is not managed by this plugin: ' + host }, 400);
+      reconcile();
+      if (payload.dryRun !== true && payload.restart !== false && payload.force !== true) {
+        const sessions = await interruptWarning(server);
+        if (sessions) return interrupted(server, sessions);
+      }
 
       const args = [UPDATE_SCRIPT, server.sshHost, '--port', String(server.remotePort), '--kind', server.serviceKind];
       if (server.serviceUnit) args.push('--unit', server.serviceUnit);
@@ -611,6 +651,11 @@ export function apply(ctx, config) {
       if (!server.sshHost) return jsonResponse({ ok: false, error: 'host is not managed by this plugin: ' + host }, 400);
       if (server.serviceKind === 'external') {
         return jsonResponse({ ok: false, error: 'host has no managed dsh service: ' + host }, 400);
+      }
+      reconcile();
+      if (action !== 'start' && payload.force !== true) {
+        const sessions = await interruptWarning(server);
+        if (sessions) return interrupted(server, sessions);
       }
       const args = [REMOTE_SCRIPT, server.sshHost, 'service', action, '--port', String(server.remotePort), '--kind', server.serviceKind];
       if (server.serviceUnit) args.push('--unit', server.serviceUnit);
