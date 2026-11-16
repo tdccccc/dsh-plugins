@@ -123,12 +123,27 @@ In the app the same settings are a compact card list:
   host or **Direct URL**; the ID is derived from the name when left empty;
 - ports, remote log, service descriptor and update target live under
   **Advanced settings** and keep their defaults when untouched;
-- the pin icon toggles the left-sidebar row without deleting the host, and the
-  arrows reorder it;
+- the pin icon toggles the left-sidebar row without deleting the host,
+  **Show all in sidebar** marks every card visible again, and the arrows reorder
+  rows;
 - the remaining card actions open the host, or remove the card.
 
 Saving re-applies the sidebar registration immediately; no restart is needed
 for a visibility or ordering change.
+
+### Two kinds of sidebar pin
+
+The pin on a settings card writes the host's `sidebar` field. It is part of the
+saved configuration (the profile patch), applied immediately and kept across
+restarts. **Show all in sidebar** marks every card visible again; save to apply.
+
+The pin that appears when hovering a row in the platform's own sidebar is
+separate: it belongs to the platform's panel list, lives only in memory, and
+resets when the app restarts. The plugin cannot read that state, so it cannot
+tell whether a missing row was hidden by this setting or unpinned by the
+platform, and it cannot restore a platform pin. If a row ignores the plugin
+switch after using the platform pin, restart the app or re-pin the row from the
+platform sidebar.
 
 ## Remote actions
 
