@@ -33,6 +33,7 @@ test('scripts reject bad arguments before touching ssh', async () => {
     [[script('remote.sh'), 'host', 'logs', '--lines', 'x'], /bad lines/],
     [[script('remote.sh'), 'host', 'service', 'explode'], /bad service action/],
     [[script('remote.sh'), 'host', 'logs', '--sessions-window', '30'], /not valid for logs/],
+    [[script('remote.sh'), 'host', 'probe', '--follow'], /not valid for probe/],
     [[script('remote.sh'), 'host', 'probe', '--sessions-window', 'zero'], /bad session window/],
     [[script('provision.sh')], /usage/],
     [[script('provision.sh'), 'host', '--port', 'abc'], /bad port/],
@@ -45,6 +46,23 @@ test('scripts reject bad arguments before touching ssh', async () => {
     const result = await run(args);
     assert.notEqual(result.code, 0, args.join(' '));
     assert.match(result.stderr, pattern, args.join(' '));
+  }
+});
+
+test('logs follow passes the flag to the remote payload', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-hosts-'));
+  try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'ssh'), '#!/bin/sh\nfor last; do :; done\nprintf "%s\\n" "$last"\n');
+    chmodSync(join(bin, 'ssh'), 0o755);
+    const result = await run([script('remote.sh'), 'demo', 'logs', '--follow', '--lines', '5'], {
+      env: { ...process.env, HOME: dir, PATH: bin + ':' + process.env.PATH },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /logs '27993' '' '5' '1'/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

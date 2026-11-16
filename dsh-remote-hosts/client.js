@@ -51,6 +51,9 @@ window.__ModuleLoader__.load({
       external: 'Open in browser',
       logShow: 'Show sync log',
       logHide: 'Hide log',
+      logFollowStart: 'Follow',
+      logFollowStop: 'Stop following',
+      logFollowTitle: 'Stream new log lines until stopped',
       log: 'Log',
       logEmpty: 'No output yet',
       logWaiting: 'Waiting for output…',
@@ -201,6 +204,9 @@ window.__ModuleLoader__.load({
       external: '外部打开',
       logShow: '显示同步日志',
       logHide: '收起日志',
+      logFollowStart: '跟随',
+      logFollowStop: '停止跟随',
+      logFollowTitle: '持续追加新日志，直到手动停止',
       log: '日志',
       logEmpty: '暂无日志',
       logWaiting: '等待输出…',
@@ -1112,10 +1118,12 @@ window.__ModuleLoader__.load({
         const active = servers.find((server) => selected === 'remote-hosts/' + server.id) || null;
         const [syncState, setSyncState] = React.useState({ busy: false, text: '', error: false });
         const [log, setLog] = React.useState({ open: false, lines: [] });
+        const [follow, setFollow] = React.useState(false);
         const [probe, setProbe] = React.useState({ id: '', at: 0, info: null, error: '' });
         const [menuOpen, setMenuOpen] = React.useState(false);
         const logRef = React.useRef(null);
         const abortRef = React.useRef(null);
+        const followRef = React.useRef(null);
         const menuRef = React.useRef(null);
         const menuOpenRef = React.useRef(false);
         const lastToggle = React.useRef(0);
@@ -1135,6 +1143,7 @@ window.__ModuleLoader__.load({
 
         React.useEffect(() => () => {
           if (abortRef.current) abortRef.current.abort();
+          if (followRef.current) followRef.current.abort();
         }, []);
 
         // The dropdown closes on any mousedown outside it; Escape is handled by
@@ -1150,6 +1159,15 @@ window.__ModuleLoader__.load({
         }, [menuOpen]);
 
         const flat = (value) => String(value || '').trim().split('\n').filter((line) => line.trim()).slice(-3).join(' / ');
+
+        // A follow request is long-lived; stop it before another action reuses
+        // the log panel, and let the Host kill the ssh tail on abort.
+        const stopFollow = () => {
+          const controller = followRef.current;
+          followRef.current = null;
+          setFollow(false);
+          if (controller) controller.abort();
+        };
 
         // The Host streams one NDJSON event per line of output, then a done
         // event carrying the same readable summary a single answer used to.
@@ -1226,6 +1244,7 @@ window.__ModuleLoader__.load({
         // Shared busy state and abort wiring; the caller writes the success
         // text and decides what to reload afterwards.
         const runAction = async (route, body, pending, failure, success) => {
+          stopFollow();
           setSyncState({ busy: true, error: false, text: pending });
           const controller = new AbortController();
           abortRef.current = controller;
@@ -1395,6 +1414,7 @@ window.__ModuleLoader__.load({
         // Log tail is a one-shot read; it lands in the same panel as the
         // streaming action output.
         const showLogs = async (server) => {
+          stopFollow();
           setSyncState({ busy: true, error: false, text: translate('loadingLogs') });
           try {
             const response = await fetch(LOGS_ROUTE, {
@@ -1409,6 +1429,80 @@ window.__ModuleLoader__.load({
             setSyncState({ busy: false, error: false, text: '' });
           } catch (err) {
             setSyncState({ busy: false, error: true, text: translate('logsFailed', { detail: flat(err && err.message ? err.message : String(err)) }) });
+          }
+        };
+
+        // Follow mode keeps one streaming request open: the Host sends one
+        // NDJSON line event per log line and a final done. Aborting the fetch
+        // kills the ssh tail on the Host side.
+        const appendFollowLine = (stream, text) => {
+          setLog((prev) => ({
+            ...prev,
+            lines: (prev.lines.length >= 400 ? prev.lines.slice(-399) : prev.lines)
+              .concat([{ stream: stream === 'stderr' ? 'stderr' : 'stdout', text }]),
+          }));
+        };
+        const startFollow = async (server) => {
+          if (!server) return;
+          if (followRef.current) {
+            followRef.current.abort();
+            followRef.current = null;
+          }
+          setLog({ open: true, lines: [] });
+          setFollow(true);
+          const controller = new AbortController();
+          followRef.current = controller;
+          try {
+            const response = await fetch(LOGS_ROUTE, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ host: server.id, lines: 200, follow: true }),
+              signal: controller.signal,
+            });
+            if (!response.ok || !/application\/x-ndjson/i.test(response.headers.get('content-type') || '')) {
+              const payload = await response.json().catch(() => ({}));
+              throw new Error(payload.error || translate('httpStatus', { status: response.status }));
+            }
+            if (!response.body || !response.body.getReader) throw new Error('response has no readable log stream');
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            for (;;) {
+              const chunk = await reader.read();
+              if (chunk.done) break;
+              buffer += decoder.decode(chunk.value, { stream: true });
+              let index;
+              while ((index = buffer.indexOf('\n')) !== -1) {
+                const line = buffer.slice(0, index);
+                buffer = buffer.slice(index + 1);
+                if (!line.trim()) continue;
+                let event;
+                try { event = JSON.parse(line); } catch { continue; }
+                if (event && event.type === 'line') appendFollowLine(event.stream, String(event.text == null ? '' : event.text));
+                else if (event && event.type === 'done' && event.ok !== true) throw new Error(event.error || 'log stream failed');
+              }
+            }
+            buffer += decoder.decode();
+            if (buffer.trim()) {
+              let event;
+              try { event = JSON.parse(buffer); } catch { event = null; }
+              if (event && event.type === 'done' && event.ok !== true) throw new Error(event.error || 'log stream failed');
+            }
+            if (followRef.current === controller) {
+              followRef.current = null;
+              setFollow(false);
+            }
+          } catch (error) {
+            if (controller.signal.aborted) return;
+            if (followRef.current === controller) {
+              followRef.current = null;
+              setFollow(false);
+            }
+            setSyncState({
+              busy: false,
+              error: true,
+              text: translate('logsFailed', { detail: flat(error && error.message ? error.message : error) }),
+            });
           }
         };
 
@@ -1488,6 +1582,11 @@ window.__ModuleLoader__.load({
             window.removeEventListener('resize', resync);
             window.removeEventListener('keydown', onKey);
             document.removeEventListener('click', onRowClick, true);
+            if (followRef.current) {
+              followRef.current.abort();
+              followRef.current = null;
+            }
+            setFollow(false);
             activateHost(active.id, false);
           };
         }, [activeId]);
@@ -1717,10 +1816,26 @@ window.__ModuleLoader__.load({
               }, probeText)
               : null,
             h('span', { style: { flex: 1 } }),
+            log.open
+              ? h('button', {
+                type: 'button',
+                disabled: !managed || syncState.busy,
+                onClick: () => {
+                  if (!active) return;
+                  if (follow) stopFollow();
+                  else startFollow(active);
+                },
+                title: follow ? translate('logFollowStop') : translate('logFollowTitle'),
+                style: barStyle(!managed || syncState.busy),
+              }, follow ? translate('logFollowStop') : translate('logFollowStart'))
+              : null,
             log.open || log.lines.length
               ? h('button', {
                 type: 'button',
-                onClick: () => setLog((prev) => ({ ...prev, open: !prev.open })),
+                onClick: () => {
+                  if (log.open && follow) stopFollow();
+                  setLog((prev) => ({ ...prev, open: !prev.open }));
+                },
                 title: log.open ? translate('logHide') : translate('logShow'),
                 style: barStyle(false),
               }, log.open ? translate('logHide') : translate('log'))

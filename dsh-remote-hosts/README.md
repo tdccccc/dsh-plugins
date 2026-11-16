@@ -182,7 +182,9 @@ The overlay's actions menu and the scripts share one behavior:
   on the unit and wait for it to settle. Start/stop appear once a check reports
   whether the service is currently active.
 - **查看远端日志** — `bin/remote.sh logs`: the last 200 lines of the remote log,
-  shown in the same panel as streaming actions.
+  shown in the same panel as streaming actions. **跟随** switches the panel to
+  a long-lived stream that appends new lines until **停止跟随**; stopping aborts
+  the request, which kills the local ssh tail.
 - A failure shows the host's one-line summary (timeout, exit code, or the last
   lines of output) instead of a bare HTTP code.
 - **Update badge** — once a probe knows the remote dsh version, an older remote
@@ -208,6 +210,7 @@ bin/sync.sh user@host --restart --profile web --unit dsh-web --kind systemd-user
 bin/update.sh user@host --version 0.2.2-rc.3 --unit dsh-web --port 27993 --dry-run
 bin/remote.sh user@host probe --sessions-window 10
 bin/remote.sh user@host logs --lines 50
+bin/remote.sh user@host logs --follow
 bin/remote.sh user@host service restart --dry-run
 ```
 

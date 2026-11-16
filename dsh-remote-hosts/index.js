@@ -194,7 +194,13 @@ function readLines(stream, onLine) {
 function streamCommand(request, args, timeoutMs = SYNC_TIMEOUT_MS) {
   let child;
   try {
-    child = spawn('sh', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn('sh', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // A follow stream must die with its request: on POSIX the shell gets its
+      // own process group, so one group kill also reaches ssh and the remote
+      // tail instead of leaving an orphan behind.
+      detached: process.platform !== 'win32',
+    });
   } catch (error) {
     return jsonResponse({ ok: false, error: 'could not run the sync script: ' + (error && error.message ? error.message : String(error)) }, 500);
   }
@@ -218,9 +224,18 @@ function streamCommand(request, args, timeoutMs = SYNC_TIMEOUT_MS) {
   readLines(child.stdout, (text) => line('stdout', stdoutTail, text));
   readLines(child.stderr, (text) => line('stderr', stderrTail, text));
 
-  const timeout = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs);
-  timeout.unref?.();
-  const stop = () => { try { child.kill('SIGKILL'); } catch {} };
+  const stop = () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try {
+      if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
+      else child.kill('SIGKILL');
+    } catch {
+      try { child.kill('SIGKILL'); } catch {}
+    }
+  };
+  // 0 means no timeout: a log follow lasts until the browser stops it.
+  const timeout = timeoutMs > 0 ? setTimeout(() => { timedOut = true; stop(); }, timeoutMs) : null;
+  timeout?.unref?.();
   if (request.signal) {
     if (request.signal.aborted) stop();
     else request.signal.addEventListener('abort', stop, { once: true });
@@ -900,8 +915,15 @@ export function apply(ctx, config) {
       if (!server) return jsonResponse({ ok: false, error: 'unknown host: ' + host }, 400);
       if (!server.sshHost) return jsonResponse({ ok: false, error: 'host is not managed by this plugin: ' + host }, 400);
       const lines = Math.min(Math.max(Math.trunc(Number(payload.lines)) || 200, 1), 1000);
+      const follow = payload.follow === true;
       const args = [REMOTE_SCRIPT, server.sshHost, 'logs', '--lines', String(lines), '--port', String(server.remotePort)];
       if (server.remoteLog) args.push('--log', server.remoteLog);
+      if (follow) {
+        args.push('--follow');
+        // The stream stays open until the browser aborts it; stopping the
+        // request kills the ssh group and the remote tail.
+        return streamCommand(request, args, 0);
+      }
       const { error, stdout, stderr } = await runScript(args, LOG_TIMEOUT_MS);
       if (error) return jsonResponse({ ok: false, error: describeFailure(error, stdout, stderr) });
       return jsonResponse({ ok: true, text: stdout });

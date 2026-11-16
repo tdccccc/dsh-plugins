@@ -22,7 +22,7 @@ usage() {
   printf '%s\n' \
     'usage: remote.sh <ssh-host> probe   [--port N] [--unit U] [--kind KIND] [--log PATH] [--sessions-window N]' \
     '       remote.sh <ssh-host> service <start|stop|restart> [--port N] [--unit U] [--kind KIND] [--dry-run]' \
-    '       remote.sh <ssh-host> logs    [--port N] [--log PATH] [--lines N]' \
+    '       remote.sh <ssh-host> logs    [--port N] [--log PATH] [--lines N] [--follow]' \
     'KIND is systemd-user (default), launchd-user, command, or external.' >&2
   exit 2
 }
@@ -40,6 +40,7 @@ KIND=systemd-user
 LOG=
 LINES=200
 DRY=0
+FOLLOW=0
 ACTION=
 SESSION_WINDOW=10
 
@@ -92,6 +93,10 @@ while [ $# -gt 0 ]; do
       shift
       [ $# -gt 0 ] || { printf '%s\n' '--lines needs a value' >&2; usage; }
       LINES=$1
+      ;;
+    --follow)
+      [ "$CMD" = logs ] || { printf -- '--follow is not valid for %s\n' "$CMD" >&2; usage; }
+      FOLLOW=1
       ;;
     --dry-run)
       [ "$CMD" = service ] || { printf -- '--dry-run is not valid for %s\n' "$CMD" >&2; usage; }
@@ -170,7 +175,7 @@ expand_log() {
 MODE=$1
 case "$MODE" in
   probe) PORT=$2; UNIT=$3; KIND=$4; LOG=$5; SESSIONS_WINDOW=${6:-10} ;;
-  logs) PORT=$2; LOG=$3; LINES=$4 ;;
+  logs) PORT=$2; LOG=$3; LINES=$4; FOLLOW=$5 ;;
   service) ACTION=$2; PORT=$3; UNIT=$4; KIND=$5; PORT_SET=$6 ;;
   *) die "unknown payload mode: $MODE" ;;
 esac
@@ -476,6 +481,11 @@ logs)
     printf 'log not found: %s\n' "$LOG_PATH_R" >&2
     exit 1
   fi
+  if [ "$FOLLOW" = 1 ]; then
+    # -F keeps reading across a rotation; the local ssh process is killed when
+    # the follow request ends, which closes the channel and stops tail.
+    exec tail -n "$LINES" -F "$LOG_FILE_R"
+  fi
   tail -n "$LINES" "$LOG_FILE_R"
   exit 0
   ;;
@@ -778,7 +788,7 @@ EOF
 do_logs() {
   RC=0
   ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" \
-    "sh -s -- logs '$PORT' '$LOG' '$LINES'" \
+    "sh -s -- logs '$PORT' '$LOG' '$LINES' '$FOLLOW'" \
     < "$TMP/payload.sh" || RC=$?
   if [ "$RC" -ne 0 ]; then
     if [ "$RC" -ne 255 ]; then
