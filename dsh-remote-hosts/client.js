@@ -771,7 +771,10 @@ window.__ModuleLoader__.load({
     }
 
     const SETTINGS_CSS = `
-.dsh-remote-hosts-settings{max-width:780px;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:1.55}
+/* The Plugins page centers its details at 960px and stretches each section to
+   that column. A narrower form would sit left-aligned inside it and leave an
+   uneven gap on the right, so match the column instead of capping the width. */
+.dsh-remote-hosts-settings{box-sizing:border-box;width:100%;max-width:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:1.55}
 .dsh-remote-hosts-settings p,.dsh-remote-hosts-settings small{color:var(--dsw-alias-label-secondary)}
 .dsh-remote-hosts-settings .rh-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}
 .dsh-remote-hosts-settings .rh-head-copy{min-width:0}
