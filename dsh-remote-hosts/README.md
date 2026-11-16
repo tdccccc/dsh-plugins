@@ -209,6 +209,11 @@ update assume the service already exists. It needs sudo-free SSH, `curl`,
 (launchd or externally managed units keep their manual setup). It installs Node under
 `~/.local/node/v<version>` and never touches a system Node.
 
+The official Node tarball is glibc-based: Ubuntu 20.04+/Debian 10+ works, while
+Alpine/musl or glibc older than 2.28 fails with an explicit message instead of a
+broken runtime. When nodejs.org is unreachable the download retries the same
+file from npmmirror and still verifies the official checksum.
+
 `update.sh` discovers the remote toolchain instead of assuming one: the service
 names the Node that serves it, that Node's prefix owns the global
 `@deepseek-ai/dsh` package, and the package's own npm replaces it in place. It

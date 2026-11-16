@@ -81,15 +81,32 @@ die() { printf '%s\n' "$*" >&2; exit 1; }
 
 NODE_BIN="$HOME/.local/node/v$NODE_VERSION/bin"
 NODE_ARCHIVE="node-v$NODE_VERSION-linux"
+NODE_BASE=https://nodejs.org/dist
+NODE_MIRROR=https://npmmirror.com/mirrors/node
 LOG="$HOME/.dsh/web-$PORT.log"
 UNIT_FILE="$HOME/.config/systemd/user/$UNIT.service"
 
 [ "$(uname -s)" = Linux ] || die "provisioning supports Linux hosts with systemd --user only"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required on the remote host"
 
+# The official Node tarball is built against glibc: Ubuntu 20.04+/Debian 10+
+# works, Alpine/musl and older distros need Node installed another way.
+LIBC=$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')
+if [ -z "$LIBC" ]; then
+  LIBC_RAW=$( (ldd --version 2>&1 || true) | head -1)
+  case "$LIBC_RAW" in
+    *musl*) die "this host uses musl libc (Alpine?); install Node 24 manually and rerun without --node-version" ;;
+    *) LIBC=$(printf '%s' "$LIBC_RAW" | sed -n 's/.*GLIBC [^0-9]*\([0-9][0-9.]*\).*/\1/p') ;;
+  esac
+fi
+[ -n "$LIBC" ] || die "could not detect the libc version; the official Node 24 build needs glibc 2.28+"
+awk -v v="$LIBC" 'BEGIN { split(v, p, "."); exit !(p[1] > 2 || (p[1] == 2 && p[2] >= 28)) }' \
+  || die "glibc $LIBC is too old for Node 24 (needs 2.28+; Ubuntu 20.04+/Debian 10+)"
+
 if [ "$DRY" = 1 ]; then
   say "host:      $(hostname)"
   say "os:        $(grep -m1 PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2- | tr -d '\"')"
+  say "libc:      glibc $LIBC"
   say "node:      $(if [ -x "$NODE_BIN/node" ]; then "$NODE_BIN/node" -v; else echo missing; fi)"
   say "dsh:       $(if [ -x "$NODE_BIN/dsh" ]; then PATH="$NODE_BIN:$PATH" "$NODE_BIN/dsh" --version 2>&1 || echo broken; else echo missing; fi)"
   say "unit:      $(if [ -f "$UNIT_FILE" ]; then echo present; else echo missing; fi)"
@@ -113,8 +130,13 @@ if [ "$FORCE" = 1 ] || [ ! -x "$NODE_BIN/node" ]; then
   trap 'rm -rf "$TMP"' EXIT
   cd "$TMP"
   FILE="$NODE_ARCHIVE-$ARCH.tar.gz"
-  curl -fsSL --retry 3 -o "$FILE" "https://nodejs.org/dist/v$NODE_VERSION/$FILE"
-  curl -fsSL --retry 3 -o SHASUMS256.txt "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt"
+  BASE=$NODE_BASE
+  if ! curl -fsSL --retry 3 -o "$FILE" "$BASE/v$NODE_VERSION/$FILE"; then
+    say "nodejs.org unreachable; retrying the same file from npmmirror"
+    BASE=$NODE_MIRROR
+    curl -fsSL --retry 3 -o "$FILE" "$BASE/v$NODE_VERSION/$FILE" || die "could not download $FILE"
+  fi
+  curl -fsSL --retry 3 -o SHASUMS256.txt "$BASE/v$NODE_VERSION/SHASUMS256.txt" || die "could not download node checksums"
   grep " $FILE\$" SHASUMS256.txt | sha256sum -c - >/dev/null || die "node checksum mismatch"
   tar -xzf "$FILE"
   rm -rf "$HOME/.local/node/v$NODE_VERSION"
