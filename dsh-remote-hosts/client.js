@@ -809,8 +809,10 @@ window.__ModuleLoader__.load({
 .dsh-remote-hosts-settings .rh-icon:hover:not(:disabled){opacity:1;background:var(--dsw-alias-bg-layer-2)}
 .dsh-remote-hosts-settings .rh-icon.rh-on{opacity:1;color:var(--dsw-alias-brand-primary)}
 .dsh-remote-hosts-settings .rh-icon.rh-danger:hover:not(:disabled){color:var(--dsw-alias-state-error-primary)}
-.dsh-remote-hosts-settings .rh-save{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);color:#fff}
-.dsh-remote-hosts-settings .rh-save:hover:not(:disabled){opacity:.92;background:var(--dsw-alias-brand-primary)}
+/* brand-primary flips to a near-white chip in the dark theme, so the label
+   must flip with it; the token pair keeps both themes readable. */
+.dsh-remote-hosts-settings .rh-save{background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary));border-color:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary));color:var(--dsw-alias-label-primary-foreground,#fff);font-weight:600}
+.dsh-remote-hosts-settings .rh-save:hover:not(:disabled){opacity:.92;background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary))}
 .dsh-remote-hosts-settings .rh-actions{display:flex;gap:8px;align-items:center;margin-top:16px}
 .dsh-remote-hosts-settings .rh-spacer{flex:1}
 .dsh-remote-hosts-settings .rh-hint{display:block;margin-top:10px;font-size:11.5px}
