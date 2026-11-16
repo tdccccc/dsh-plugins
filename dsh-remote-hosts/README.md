@@ -90,12 +90,20 @@ dsh-remote-hosts → Configure**, or in the profile patch:
 | `serviceUnit` | systemd unit or launchd label; defaults to `dsh-web` for the managed kinds. |
 | `profile` | Remote profile directory under `~/.dsh/profiles`; default `web`. |
 | `updateChannel` | Update target: empty mirrors this app's dsh version; otherwise an npm dist-tag (`latest`, `next`) or exact version. |
-| `sidebar` | Show the host as a row in the left sidebar (default true). Hidden hosts stay configured and openable from the settings card or the overlay switcher. |
+| `sidebar` | Show the host as a row in the left sidebar (default true). Hidden hosts stay configured and openable from the settings card or the overlay switcher. The settings pin icon writes this field. |
 
-The same fields are available in the in-app form, one labelled card per host.
-Each card has open, move up/down and remove actions, and a **Show in the left
-sidebar** switch; the arrows decide the sidebar order. Service fields are only
-editable when the row has an SSH host; `url` becomes optional then.
+In the app the same settings are a compact card list:
+
+- a card is added with one click and needs only a name plus **SSH-managed**
+  host or **Direct URL**; the ID is derived from the name when left empty;
+- ports, remote log, service descriptor and update target live under
+  **Advanced settings** and keep their defaults when untouched;
+- the pin icon toggles the left-sidebar row without deleting the host, and the
+  arrows reorder it;
+- the remaining card actions open the host, or remove the card.
+
+Saving re-applies the sidebar registration immediately; no restart is needed
+for a visibility or ordering change.
 
 ## Remote actions
 

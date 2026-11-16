@@ -68,6 +68,14 @@ window.__ModuleLoader__.load({
       showInSidebar: 'Show in the left sidebar',
       hiddenBadge: 'hidden',
       newServer: 'New server',
+      serversTitle: 'Remote servers',
+      serversSubtitle: 'Each card is one remote dsh web endpoint. SSH-managed hosts also get sync, update and service actions.',
+      connectionMode: 'Connection type',
+      modeSsh: 'SSH-managed',
+      modeUrl: 'Direct URL',
+      advanced: 'Advanced settings',
+      idOptional: 'ID (optional)',
+      notConfigured: 'Not configured',
       updateTitle: 'Install this app\'s dsh version on the host and restart the remote dsh-web',
       updating: 'Updating dsh…',
       updateFailed: 'Update failed: {detail}',
@@ -183,6 +191,14 @@ window.__ModuleLoader__.load({
       showInSidebar: '在左侧栏显示',
       hiddenBadge: '已隐藏',
       newServer: '新服务器',
+      serversTitle: '远程服务器',
+      serversSubtitle: '每张卡片是一个远程 dsh web 端点；SSH 托管的主机还支持同步、更新和服务操作。',
+      connectionMode: '连接方式',
+      modeSsh: 'SSH 托管',
+      modeUrl: 'URL 直连',
+      advanced: '高级设置',
+      idOptional: 'ID（可选，自动生成）',
+      notConfigured: '未配置',
       updateTitle: '把本机应用使用的 dsh 版本装到该主机，并重启远端 dsh-web',
       updating: '更新 dsh 中…',
       updateFailed: '更新失败：{detail}',
@@ -395,6 +411,23 @@ window.__ModuleLoader__.load({
         sidebar: row.sidebar !== false,
       };
     };
+    // Derive a stable panel id from a human label/host when the user leaves the
+    // advanced ID field empty, so the simple form has one less required field.
+    const slugOf = (value) => String(value === undefined || value === null ? '' : value)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 63);
+    const pinIcon = (filled) => h('svg', {
+      width: 14, height: 14, viewBox: '0 0 16 16', 'aria-hidden': 'true', fill: 'none',
+    },
+      h('path', {
+        d: 'M10.4 1.9 14.1 5.6l-1.9.5-2 2 .2 2.2-1.2 1.2-4.9-4.9 1.2-1.2 2.2.2 2-2z',
+        fill: filled ? 'currentColor' : 'none',
+        stroke: 'currentColor', strokeWidth: 1.2, strokeLinejoin: 'round',
+      }),
+      h('path', { d: 'M4.6 11.4 2 14', stroke: 'currentColor', strokeWidth: 1.2, strokeLinecap: 'round' })
+    );
     const parsePort = (value, min, max) => {
       const text = String(value === undefined || value === null ? '' : value).trim();
       if (!text) return null;
@@ -473,7 +506,14 @@ window.__ModuleLoader__.load({
         const rawUrl = row.url.trim();
         if (!row.id.trim() && !row.label.trim() && !rawUrl && !sshHost) return;
         const where = t('row') + ' ' + (index + 1) + ': ';
-        const id = row.id.trim();
+        // ID is an implementation detail for most users: derive it from the
+        // name, SSH host, or URL host unless the advanced field overrides it.
+        let id = row.id.trim();
+        if (!id) {
+          let urlHost = '';
+          try { if (rawUrl) urlHost = new URL(rawUrl).hostname; } catch {}
+          id = slugOf(row.label) || slugOf(sshHost) || slugOf(urlHost);
+        }
         if (!id) throw new Error(where + t('idRequired'));
         if (!ID_PATTERN.test(id)) throw new Error(where + t('badId'));
         if (ids.has(id)) throw new Error(where + t('duplicateId') + ' ' + id);
@@ -591,6 +631,20 @@ window.__ModuleLoader__.load({
           h('option', { value: '' }, t('serviceKindAuto')),
           ...SERVICE_KINDS.map((kind) => h('option', { key: kind, value: kind }, kind))
         ));
+
+      // The simple form asks only for a name plus an SSH host or a URL; the
+      // mode switch decides which of the two target shapes the host uses.
+      const modeOf = (row) => (row.sshHost.trim() ? 'ssh' : 'url');
+      const setMode = (index, mode) => {
+        if (mode === 'ssh') patchRow(index, 'url', '');
+        else patchRow(index, 'sshHost', '');
+      };
+      const summaryOf = (row) => {
+        if (row.sshHost.trim()) {
+          return 'ssh · ' + row.sshHost.trim() + ' · :' + (row.remotePort.trim() || '27993');
+        }
+        return row.url.trim() || t('notConfigured');
+      };
       const discard = async () => {
         setNotice('');
         setFailed(false);
@@ -632,90 +686,136 @@ window.__ModuleLoader__.load({
 
       return h('form', { className: 'dsh-remote-hosts-settings', onSubmit: save },
         h('style', null, SETTINGS_CSS),
-        h('p', null, t('intro')),
+        h('div', { className: 'rh-head' },
+          h('div', { className: 'rh-head-copy' },
+            h('h2', { className: 'rh-title' }, t('serversTitle')),
+            h('p', { className: 'rh-sub' }, t('serversSubtitle'))),
+          h('button', { type: 'button', className: 'rh-add', disabled: busy, onClick: addRow }, '+ ' + t('add'))),
         snapshot.error ? h('p', { role: 'alert' }, snapshot.error) : null,
-        ...draft.map((row, index) => h('div', { className: 'rh-card', key: row.key },
-          h('div', { className: 'rh-card-head' },
-            h('span', { className: 'rh-card-title' }, row.label.trim() || row.id.trim() || t('newServer')),
-            row.sidebar === false ? h('span', { className: 'rh-badge' }, t('hiddenBadge')) : null,
-            h('span', { className: 'rh-spacer' }),
-            h('button', {
-              type: 'button', className: 'rh-icon', disabled: busy || !row.id.trim(),
-              title: t('open'), 'aria-label': t('open'), onClick: () => openRow(index),
-            }, '↗'),
-            h('button', {
-              type: 'button', className: 'rh-icon', disabled: busy || index === 0,
-              title: t('moveUp'), 'aria-label': t('moveUp'), onClick: () => moveRow(index, -1),
-            }, '↑'),
-            h('button', {
-              type: 'button', className: 'rh-icon', disabled: busy || index === draft.length - 1,
-              title: t('moveDown'), 'aria-label': t('moveDown'), onClick: () => moveRow(index, 1),
-            }, '↓'),
-            h('button', {
-              type: 'button', className: 'rh-icon rh-remove', disabled: busy,
-              title: t('remove'), 'aria-label': t('remove'), onClick: () => removeRow(index),
-            }, '×')
-          ),
-          h('div', { className: 'rh-fields' },
-            textField(index, row, 'id', t('id'), { placeholder: t('idPlaceholder') }),
-            textField(index, row, 'label', t('label'), { placeholder: t('labelPlaceholder') }),
-            textField(index, row, 'url', t('url'), { placeholder: t('urlPlaceholder'), wide: true })
-          ),
-          h('div', { className: 'rh-fields' },
-            textField(index, row, 'sshHost', t('sshHost'), { placeholder: t('sshHostPlaceholder') }),
-            textField(index, row, 'remotePort', t('remotePort'), { placeholder: t('remotePortPlaceholder'), numeric: true }),
-            textField(index, row, 'localPort', t('localPort'), { placeholder: t('localPortPlaceholder'), numeric: true }),
-            textField(index, row, 'remoteLog', t('remoteLog'), { placeholder: t('remoteLogPlaceholder') })
-          ),
-          h('div', { className: 'rh-fields' },
-            serviceKindField(index, row),
-            textField(index, row, 'serviceUnit', t('serviceUnit'), { placeholder: t('serviceUnitPlaceholder') }),
-            textField(index, row, 'profile', t('profile'), { placeholder: t('profilePlaceholder') }),
-            textField(index, row, 'updateChannel', t('updateChannel'), { placeholder: t('updateChannelPlaceholder') })
-          ),
-          h('label', { className: 'rh-check' },
-            h('input', {
-              type: 'checkbox', checked: row.sidebar !== false, disabled: busy,
-              onChange: (event) => patchRow(index, 'sidebar', event.target.checked),
-            }),
-            h('span', null, t('showInSidebar'))
-          )
-        )),
-        draft.length === 0 ? h('p', { className: 'rh-empty' }, t('empty')) : null,
+        draft.length === 0
+          ? h('div', { className: 'rh-empty-card' },
+            h('p', null, t('empty')),
+            h('button', { type: 'button', className: 'rh-add', disabled: busy, onClick: addRow }, '+ ' + t('add')))
+          : null,
+        ...draft.map((row, index) => {
+          const mode = modeOf(row);
+          return h('div', { className: 'rh-card', key: row.key },
+            h('div', { className: 'rh-card-head' },
+              h('span', { className: 'rh-avatar', 'aria-hidden': 'true' }, (row.label.trim() || row.id.trim() || '?').slice(0, 1).toUpperCase()),
+              h('div', { className: 'rh-card-id' },
+                h('span', { className: 'rh-card-title' }, row.label.trim() || row.id.trim() || t('newServer')),
+                h('span', { className: 'rh-card-sub' }, summaryOf(row))),
+              h('div', { className: 'rh-card-actions' },
+                h('button', {
+                  type: 'button',
+                  className: 'rh-icon' + (row.sidebar !== false ? ' rh-on' : ''),
+                  disabled: busy, title: t('showInSidebar'), 'aria-label': t('showInSidebar'),
+                  'aria-pressed': row.sidebar !== false,
+                  onClick: () => patchRow(index, 'sidebar', row.sidebar === false),
+                }, pinIcon(row.sidebar !== false)),
+                h('button', {
+                  type: 'button', className: 'rh-icon', disabled: busy || !row.id.trim(),
+                  title: t('open'), 'aria-label': t('open'), onClick: () => openRow(index),
+                }, '↗'),
+                h('button', {
+                  type: 'button', className: 'rh-icon', disabled: busy || index === 0,
+                  title: t('moveUp'), 'aria-label': t('moveUp'), onClick: () => moveRow(index, -1),
+                }, '↑'),
+                h('button', {
+                  type: 'button', className: 'rh-icon', disabled: busy || index === draft.length - 1,
+                  title: t('moveDown'), 'aria-label': t('moveDown'), onClick: () => moveRow(index, 1),
+                }, '↓'),
+                h('button', {
+                  type: 'button', className: 'rh-icon rh-danger', disabled: busy,
+                  title: t('remove'), 'aria-label': t('remove'), onClick: () => removeRow(index),
+                }, '×')))
+            ,
+            h('div', { className: 'rh-segment', role: 'group', 'aria-label': t('connectionMode') },
+              h('button', {
+                type: 'button', className: mode === 'ssh' ? 'rh-seg-on' : '', disabled: busy,
+                onClick: () => setMode(index, 'ssh'),
+              }, t('modeSsh')),
+              h('button', {
+                type: 'button', className: mode === 'url' ? 'rh-seg-on' : '', disabled: busy,
+                onClick: () => setMode(index, 'url'),
+              }, t('modeUrl'))),
+            mode === 'ssh'
+              ? h('div', { className: 'rh-primary-fields' },
+                textField(index, row, 'label', t('label'), { placeholder: t('labelPlaceholder') }),
+                textField(index, row, 'sshHost', t('sshHost'), { placeholder: t('sshHostPlaceholder') }),
+                textField(index, row, 'remotePort', t('remotePort'), { placeholder: t('remotePortPlaceholder'), numeric: true }))
+              : h('div', { className: 'rh-primary-fields' },
+                textField(index, row, 'label', t('label'), { placeholder: t('labelPlaceholder') }),
+                textField(index, row, 'url', t('url'), { placeholder: t('urlPlaceholder') })),
+            h('details', { className: 'rh-adv' },
+              h('summary', null, t('advanced')),
+              h('div', { className: 'rh-fields' },
+                textField(index, row, 'id', t('idOptional'), { placeholder: t('idPlaceholder') }),
+                mode === 'ssh' ? textField(index, row, 'localPort', t('localPort'), { placeholder: t('localPortPlaceholder'), numeric: true }) : null,
+                mode === 'ssh' ? textField(index, row, 'remoteLog', t('remoteLog'), { placeholder: t('remoteLogPlaceholder') }) : null),
+              mode === 'ssh'
+                ? h('div', { className: 'rh-fields' },
+                  serviceKindField(index, row),
+                  textField(index, row, 'serviceUnit', t('serviceUnit'), { placeholder: t('serviceUnitPlaceholder') }),
+                  textField(index, row, 'profile', t('profile'), { placeholder: t('profilePlaceholder') }),
+                  textField(index, row, 'updateChannel', t('updateChannel'), { placeholder: t('updateChannelPlaceholder') }))
+                : null)
+          );
+        }),
         h('div', { className: 'rh-actions' },
-          h('button', { type: 'button', disabled: busy, onClick: addRow }, t('add')),
           h('span', { className: 'rh-spacer' }),
-          h('button', { type: 'submit', disabled: busy }, busy ? t('saving') : t('save')),
+          h('button', { type: 'submit', className: 'rh-save', disabled: busy }, busy ? t('saving') : t('save')),
           h('button', { type: 'button', disabled: busy, onClick: discard }, t('discard'))),
         notice ? h('p', { role: failed ? 'alert' : 'status', 'data-error': failed ? 'true' : undefined }, notice) : null,
-        h('small', null, t('hint')));
+        h('small', { className: 'rh-hint' }, t('hint')));
     }
 
     const SETTINGS_CSS = `
-.dsh-remote-hosts-settings{max-width:820px;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:1.6}
+.dsh-remote-hosts-settings{max-width:780px;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:1.55}
 .dsh-remote-hosts-settings p,.dsh-remote-hosts-settings small{color:var(--dsw-alias-label-secondary)}
-.dsh-remote-hosts-settings .rh-card{margin:12px 0;padding:14px 16px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1)}
-.dsh-remote-hosts-settings .rh-card-head{display:flex;align-items:center;gap:6px;min-width:0}
-.dsh-remote-hosts-settings .rh-card-title{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60%}
-.dsh-remote-hosts-settings .rh-badge{flex:0 0 auto;font-size:11px;line-height:1;padding:3px 7px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary)}
+.dsh-remote-hosts-settings .rh-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}
+.dsh-remote-hosts-settings .rh-head-copy{min-width:0}
+.dsh-remote-hosts-settings .rh-title{margin:0;font-size:15px;font-weight:600}
+.dsh-remote-hosts-settings .rh-sub{margin:3px 0 0;font-size:12px}
+.dsh-remote-hosts-settings .rh-add{flex:0 0 auto;padding:7px 13px;border-radius:9px;border:1px solid var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);background:transparent;font-weight:500;cursor:pointer}
+.dsh-remote-hosts-settings .rh-add:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}
+.dsh-remote-hosts-settings .rh-empty-card{margin:12px 0;padding:22px;border:1px dashed var(--dsw-alias-border-l1);border-radius:14px;display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center}
+.dsh-remote-hosts-settings .rh-card{margin:10px 0;padding:14px 16px;border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1);transition:border-color .15s ease}
+.dsh-remote-hosts-settings .rh-card:hover{border-color:var(--dsw-alias-border-l2,var(--dsw-alias-border-l1))}
+.dsh-remote-hosts-settings .rh-card-head{display:flex;align-items:center;gap:10px;min-width:0}
+.dsh-remote-hosts-settings .rh-avatar{flex:0 0 auto;width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:var(--dsw-alias-bg-layer-2);font-size:13px;font-weight:600}
+.dsh-remote-hosts-settings .rh-card-id{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.dsh-remote-hosts-settings .rh-card-title{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-remote-hosts-settings .rh-card-sub{font-size:12px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-remote-hosts-settings .rh-card-actions{flex:0 0 auto;display:flex;gap:2px;align-items:center}
+.dsh-remote-hosts-settings .rh-segment{display:inline-flex;padding:2px;margin-top:12px;border-radius:9px;background:var(--dsw-alias-bg-layer-2)}
+.dsh-remote-hosts-settings .rh-segment button{padding:4px 12px;border:0;border-radius:7px;background:transparent;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer}
+.dsh-remote-hosts-settings .rh-segment button.rh-seg-on{background:var(--dsw-alias-bg-base,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-primary);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.dsh-remote-hosts-settings .rh-primary-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
+.dsh-remote-hosts-settings .rh-adv{margin-top:12px;padding-top:8px;border-top:1px dashed var(--dsw-alias-border-l1)}
+.dsh-remote-hosts-settings .rh-adv>summary{list-style:none;cursor:pointer;font-size:12px;color:var(--dsw-alias-label-secondary);user-select:none}
+.dsh-remote-hosts-settings .rh-adv>summary::-webkit-details-marker{display:none}
+.dsh-remote-hosts-settings .rh-adv>summary::before{content:'▸';display:inline-block;width:14px}
+.dsh-remote-hosts-settings .rh-adv[open]>summary::before{content:'▾'}
 .dsh-remote-hosts-settings .rh-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:10px}
 .dsh-remote-hosts-settings .rh-field{display:flex;flex-direction:column;gap:4px;min-width:0}
-.dsh-remote-hosts-settings .rh-field>span{font-size:11.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dsh-remote-hosts-settings .rh-wide{grid-column:span 2}
-.dsh-remote-hosts-settings .rh-check{display:flex;align-items:center;gap:7px;margin-top:12px;font-size:12.5px;color:var(--dsw-alias-label-secondary);cursor:pointer}
+.dsh-remote-hosts-settings .rh-field>span{font-size:11.5px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsh-remote-hosts-settings select,.dsh-remote-hosts-settings input:not([type=checkbox]){box-sizing:border-box;min-width:0;width:100%;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px;color:inherit}
-.dsh-remote-hosts-settings input[type=checkbox]{width:auto;margin:0;accent-color:var(--dsw-alias-brand-primary)}
 .dsh-remote-hosts-settings button{padding:6px 12px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;cursor:pointer;font:inherit;color:inherit}
 .dsh-remote-hosts-settings button:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}
 .dsh-remote-hosts-settings button:disabled{opacity:.5;cursor:default}
 .dsh-remote-hosts-settings :focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
-.dsh-remote-hosts-settings .rh-icon{width:28px;height:28px;padding:0;line-height:1;font-size:14px;border-radius:7px}
-.dsh-remote-hosts-settings .rh-remove:hover:not(:disabled){color:var(--dsw-alias-state-error-primary)}
+.dsh-remote-hosts-settings .rh-icon{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:7px;background:transparent;line-height:1;font-size:13px;opacity:.55}
+.dsh-remote-hosts-settings .rh-icon:hover:not(:disabled){opacity:1;background:var(--dsw-alias-bg-layer-2)}
+.dsh-remote-hosts-settings .rh-icon.rh-on{opacity:1;color:var(--dsw-alias-brand-primary)}
+.dsh-remote-hosts-settings .rh-icon.rh-danger:hover:not(:disabled){color:var(--dsw-alias-state-error-primary)}
+.dsh-remote-hosts-settings .rh-save{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);color:#fff}
+.dsh-remote-hosts-settings .rh-save:hover:not(:disabled){opacity:.92;background:var(--dsw-alias-brand-primary)}
 .dsh-remote-hosts-settings .rh-actions{display:flex;gap:8px;align-items:center;margin-top:16px}
-.dsh-remote-hosts-settings .rh-spacer{flex:1;min-width:8px}
-.dsh-remote-hosts-settings .rh-empty{margin:10px 0 0;font-size:12px}
+.dsh-remote-hosts-settings .rh-spacer{flex:1}
+.dsh-remote-hosts-settings .rh-hint{display:block;margin-top:10px;font-size:11.5px}
 .dsh-remote-hosts-settings [data-error=true]{color:var(--dsw-alias-state-error-primary)}
-@media(max-width:720px){.dsh-remote-hosts-settings .rh-fields{grid-template-columns:repeat(2,minmax(0,1fr))}.dsh-remote-hosts-settings .rh-wide{grid-column:span 2}.dsh-remote-hosts-settings .rh-card-title{max-width:45%}}
+@media(max-width:720px){.dsh-remote-hosts-settings .rh-primary-fields{grid-template-columns:1fr 1fr}.dsh-remote-hosts-settings .rh-fields{grid-template-columns:repeat(2,minmax(0,1fr))}.dsh-remote-hosts-settings .rh-head{flex-direction:column}}
 `;
 
     function apply(ctx) {
@@ -1401,11 +1501,15 @@ window.__ModuleLoader__.load({
       const setServers = (input) => {
         const next = normalizeServers(input);
         if (sameServers(state.servers, next)) return;
+        // A visibility flip does not change ids, but the sidebar slot itself has
+        // to be registered or disposed; labels and URLs can stay in place so an
+        // open view survives an unrelated settings save.
+        const visibilityChanged = state.servers.length === next.length
+          && state.servers.some((server, index) => (server.sidebar !== false) !== (next[index].sidebar !== false));
         if (sameServerIds(state.servers, next)) {
-          // Same rows in the same order: update labels and URLs in place so an
-          // open view is not unmounted just because a setting changed.
           next.forEach((server, index) => Object.assign(state.servers[index], server));
           setState({ ...state, servers: state.servers.slice() });
+          if (visibilityChanged) installServers(state.servers.slice());
           return;
         }
         setState({ ...state, servers: next });
