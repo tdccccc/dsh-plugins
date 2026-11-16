@@ -90,8 +90,11 @@ dsh-remote-hosts → Configure**, or in the profile patch:
 | `serviceUnit` | systemd unit or launchd label; defaults to `dsh-web` for the managed kinds. |
 | `profile` | Remote profile directory under `~/.dsh/profiles`; default `web`. |
 | `updateChannel` | Update target: empty mirrors this app's dsh version; otherwise an npm dist-tag (`latest`, `next`) or exact version. |
+| `sidebar` | Show the host as a row in the left sidebar (default true). Hidden hosts stay configured and openable from the settings card or the overlay switcher. |
 
-The same fields are available in the in-app form. Service fields are only
+The same fields are available in the in-app form, one labelled card per host.
+Each card has open, move up/down and remove actions, and a **Show in the left
+sidebar** switch; the arrows decide the sidebar order. Service fields are only
 editable when the row has an SSH host; `url` becomes optional then.
 
 ## Remote actions
@@ -107,8 +110,9 @@ The overlay's actions menu and the scripts share one behavior:
 - **检测远端** — `bin/remote.sh probe`: one JSON summary with OS, dsh version,
   install path, node, service state/pid, port HTTP status and log token count.
   Cached for a minute; the Host also returns it in the status payload.
-- **重启远端服务** — `bin/remote.sh service restart`: restart the unit and wait
-  for it to answer. `service start|stop` are available from the CLI.
+- **重启/启动/停止远端服务** — `bin/remote.sh service restart|start|stop`: act
+  on the unit and wait for it to settle. Start/stop appear once a check reports
+  whether the service is currently active.
 - **查看远端日志** — `bin/remote.sh logs`: the last 200 lines of the remote log,
   shown in the same panel as streaming actions.
 - A failure shows the host's one-line summary (timeout, exit code, or the last

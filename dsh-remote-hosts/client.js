@@ -62,6 +62,12 @@ window.__ModuleLoader__.load({
       shortcutSwitch: 'Switch to remote host {n}',
       confirmRestart: 'Sync settings to {host} and restart the remote dsh-web?\n\nRestarting interrupts sessions running on the remote.',
       update: 'Update dsh',
+      open: 'Open',
+      moveUp: 'Move up',
+      moveDown: 'Move down',
+      showInSidebar: 'Show in the left sidebar',
+      hiddenBadge: 'hidden',
+      newServer: 'New server',
       updateTitle: 'Install this app\'s dsh version on the host and restart the remote dsh-web',
       updating: 'Updating dsh…',
       updateFailed: 'Update failed: {detail}',
@@ -70,6 +76,14 @@ window.__ModuleLoader__.load({
       more: 'More actions',
       probe: 'Check remote',
       restartService: 'Restart remote service',
+      startService: 'Start remote service',
+      stopService: 'Stop remote service',
+      confirmServiceStart: 'Start dsh-web on {host}?',
+      confirmServiceStop: 'Stop dsh-web on {host}?\n\nSessions running on the remote are interrupted.',
+      startingService: 'Starting remote service…',
+      stoppingService: 'Stopping remote service…',
+      serviceStarted: 'Remote service on {host} started',
+      serviceStopped: 'Remote service on {host} stopped',
       showLogs: 'Show remote log',
       loadingLogs: 'Reading remote log…',
       logsFailed: 'Could not read the remote log: {detail}',
@@ -122,7 +136,7 @@ window.__ModuleLoader__.load({
       loading: 'Loading settings…',
       retry: 'Retry',
       empty: 'No servers configured yet.',
-      hint: 'Rows with an SSH host are fully managed: the plugin owns the tunnel and auth proxy, reads the login token from the remote log, and can sync settings or update dsh there. A URL is required only for hosts opened directly. Ports default to 27993 remote and 0 local (auto); the remote log defaults to ~/.dsh/web-<port>.log.',
+      hint: 'Rows with an SSH host are fully managed: the plugin owns the tunnel and auth proxy, reads the login token from the remote log, and can sync settings or update dsh there. A URL is required only for hosts opened directly. Ports default to 27993 remote and 0 local (auto); the remote log defaults to ~/.dsh/web-<port>.log. The switch keeps a configured host out of the left sidebar, and the arrows change its sidebar order.',
       row: 'Row',
       idRequired: 'Every server needs an id.',
       badId: 'Use letters, digits, and dashes, up to 63 characters.',
@@ -163,6 +177,12 @@ window.__ModuleLoader__.load({
       shortcutSwitch: '切换到远程主机 {n}',
       confirmRestart: '同步配置到 {host} 并重启远端 dsh-web？\n\n重启会中断远端正在运行的会话。',
       update: '更新 dsh',
+      open: '打开',
+      moveUp: '上移',
+      moveDown: '下移',
+      showInSidebar: '在左侧栏显示',
+      hiddenBadge: '已隐藏',
+      newServer: '新服务器',
       updateTitle: '把本机应用使用的 dsh 版本装到该主机，并重启远端 dsh-web',
       updating: '更新 dsh 中…',
       updateFailed: '更新失败：{detail}',
@@ -171,6 +191,14 @@ window.__ModuleLoader__.load({
       more: '更多操作',
       probe: '检测远端',
       restartService: '重启远端服务',
+      startService: '启动远端服务',
+      stopService: '停止远端服务',
+      confirmServiceStart: '启动 {host} 上的 dsh-web？',
+      confirmServiceStop: '停止 {host} 上的 dsh-web？\n\n会中断远端正在运行的会话。',
+      startingService: '启动远端服务中…',
+      stoppingService: '停止远端服务中…',
+      serviceStarted: '{host} 上的远端服务已启动',
+      serviceStopped: '{host} 上的远端服务已停止',
       showLogs: '查看远端日志',
       loadingLogs: '读取远端日志中…',
       logsFailed: '读取远端日志失败：{detail}',
@@ -223,7 +251,7 @@ window.__ModuleLoader__.load({
       loading: '正在加载设置…',
       retry: '重试',
       empty: '尚未配置服务器。',
-      hint: '填写 SSH 主机的行由插件完全管理：自动建立隧道和鉴权代理、从远端日志读取登录 token，并可同步配置或更新 dsh。只有直接打开的地址才必须填 URL。远端端口默认 27993，本地端口 0 表示自动，远端日志默认 ~/.dsh/web-<port>.log。',
+      hint: '填写 SSH 主机的行由插件完全管理：自动建立隧道和鉴权代理、从远端日志读取登录 token，并可同步配置或更新 dsh。只有直接打开的地址才必须填 URL。远端端口默认 27993，本地端口 0 表示自动，远端日志默认 ~/.dsh/web-<port>.log。开关控制是否显示在左侧栏，上下箭头调整侧边栏顺序。',
       row: '行',
       idRequired: '每台服务器都需要一个 id。',
       badId: '只能使用字母、数字和连字符，最多 63 个字符。',
@@ -253,7 +281,8 @@ window.__ModuleLoader__.load({
       if (!url && !managed && !value.sshHost) return null;
       const label = typeof value.label === 'string' && value.label.trim() ? value.label.trim() : id;
       const sshHost = typeof value.sshHost === 'string' ? value.sshHost.trim() : '';
-      return sshHost ? { id, label, url, sshHost, managed } : { id, label, url, managed };
+      const sidebar = value.sidebar !== false;
+      return sshHost ? { id, label, url, sshHost, managed, sidebar } : { id, label, url, managed, sidebar };
     };
 
     // The Host half is authoritative; this copy is what the sidebar rendered
@@ -274,7 +303,8 @@ window.__ModuleLoader__.load({
     const sameServers = (left, right) =>
       left.length === right.length && left.every((server, index) => {
         const other = right[index];
-        return server.id === other.id && server.label === other.label && server.url === other.url;
+        return server.id === other.id && server.label === other.label && server.url === other.url
+          && (server.sidebar !== false) === (other.sidebar !== false);
       });
 
     const sameServerIds = (left, right) =>
@@ -362,6 +392,7 @@ window.__ModuleLoader__.load({
         serviceUnit: textOf(row.serviceUnit),
         profile: textOf(row.profile),
         updateChannel: textOf(row.updateChannel),
+        sidebar: row.sidebar !== false,
       };
     };
     const parsePort = (value, min, max) => {
@@ -473,12 +504,13 @@ window.__ModuleLoader__.load({
         if (sshHost && serviceUnit) value.serviceUnit = serviceUnit;
         if (sshHost && profile) value.profile = profile;
         if (sshHost && updateChannel) value.updateChannel = updateChannel;
+        if (row.sidebar === false) value.sidebar = false;
         values.push(value);
       });
       return values;
     }
 
-    function SettingsForm({ ctx, store, view, onSaved }) {
+    function SettingsForm({ ctx, store, view, onSaved, onOpen }) {
       const t = useTranslate(ctx.locale);
       const snapshot = useSource(store);
       const [draft, setDraft] = React.useState(null);
@@ -520,6 +552,45 @@ window.__ModuleLoader__.load({
         setDraft((current) => current.filter((_, i) => i !== index));
         setNotice('');
       };
+      const moveRow = (index, delta) => {
+        setDraft((current) => {
+          const target = index + delta;
+          if (target < 0 || target >= current.length) return current;
+          const next = current.slice();
+          const [row] = next.splice(index, 1);
+          next.splice(target, 0, row);
+          return next;
+        });
+        setNotice('');
+      };
+      const openRow = (index) => {
+        const row = draft && draft[index];
+        if (!row || !row.id.trim()) return;
+        if (typeof onOpen === 'function') onOpen(row.id.trim());
+      };
+      // One labelled text input; labels are visible instead of relying on
+      // placeholders so an empty advanced field still reads as a field.
+      const textField = (index, row, key, label, options = {}) => h('label', {
+        className: 'rh-field' + (options.wide ? ' rh-wide' : ''),
+        key,
+      },
+        h('span', null, label),
+        h('input', {
+          type: 'text', value: row[key], placeholder: options.placeholder, 'aria-label': label,
+          title: label, spellCheck: false, disabled: busy,
+          inputMode: options.numeric ? 'numeric' : undefined,
+          onChange: (event) => patchRow(index, key, event.target.value),
+        }));
+      const serviceKindField = (index, row) => h('label', { className: 'rh-field', key: 'serviceKind' },
+        h('span', null, t('serviceKind')),
+        h('select', {
+          value: row.serviceKind, 'aria-label': t('serviceKind'), title: t('serviceKind'),
+          disabled: busy || !row.sshHost.trim(),
+          onChange: (event) => patchRow(index, 'serviceKind', event.target.value),
+        },
+          h('option', { value: '' }, t('serviceKindAuto')),
+          ...SERVICE_KINDS.map((kind) => h('option', { key: kind, value: kind }, kind))
+        ));
       const discard = async () => {
         setNotice('');
         setFailed(false);
@@ -564,74 +635,50 @@ window.__ModuleLoader__.load({
         h('p', null, t('intro')),
         snapshot.error ? h('p', { role: 'alert' }, snapshot.error) : null,
         ...draft.map((row, index) => h('div', { className: 'rh-card', key: row.key },
-          h('div', { className: 'rh-grid rh-main' },
-            h('input', {
-              type: 'text', value: row.id, placeholder: t('idPlaceholder'), 'aria-label': t('id'),
-              title: t('id'), spellCheck: false, disabled: busy,
-              onChange: (event) => patchRow(index, 'id', event.target.value),
-            }),
-            h('input', {
-              type: 'text', value: row.label, placeholder: t('labelPlaceholder'), 'aria-label': t('label'),
-              title: t('label'), disabled: busy,
-              onChange: (event) => patchRow(index, 'label', event.target.value),
-            }),
-            h('input', {
-              type: 'text', value: row.url, placeholder: t('urlPlaceholder'), 'aria-label': t('url'),
-              title: t('url'), spellCheck: false, disabled: busy,
-              onChange: (event) => patchRow(index, 'url', event.target.value),
-            }),
+          h('div', { className: 'rh-card-head' },
+            h('span', { className: 'rh-card-title' }, row.label.trim() || row.id.trim() || t('newServer')),
+            row.sidebar === false ? h('span', { className: 'rh-badge' }, t('hiddenBadge')) : null,
+            h('span', { className: 'rh-spacer' }),
             h('button', {
-              type: 'button', className: 'rh-remove', disabled: busy,
-              title: t('remove'), 'aria-label': t('remove'),
-              onClick: () => removeRow(index),
+              type: 'button', className: 'rh-icon', disabled: busy || !row.id.trim(),
+              title: t('open'), 'aria-label': t('open'), onClick: () => openRow(index),
+            }, '↗'),
+            h('button', {
+              type: 'button', className: 'rh-icon', disabled: busy || index === 0,
+              title: t('moveUp'), 'aria-label': t('moveUp'), onClick: () => moveRow(index, -1),
+            }, '↑'),
+            h('button', {
+              type: 'button', className: 'rh-icon', disabled: busy || index === draft.length - 1,
+              title: t('moveDown'), 'aria-label': t('moveDown'), onClick: () => moveRow(index, 1),
+            }, '↓'),
+            h('button', {
+              type: 'button', className: 'rh-icon rh-remove', disabled: busy,
+              title: t('remove'), 'aria-label': t('remove'), onClick: () => removeRow(index),
             }, '×')
           ),
-          h('div', { className: 'rh-grid rh-extra' },
-            h('input', {
-              type: 'text', value: row.sshHost, placeholder: t('sshHostPlaceholder'), 'aria-label': t('sshHost'),
-              title: t('sshHost'), spellCheck: false, disabled: busy,
-              onChange: (event) => patchRow(index, 'sshHost', event.target.value),
-            }),
-            h('input', {
-              type: 'text', value: row.remotePort, placeholder: t('remotePortPlaceholder'), 'aria-label': t('remotePort'),
-              title: t('remotePort'), inputMode: 'numeric', spellCheck: false, disabled: busy,
-              onChange: (event) => patchRow(index, 'remotePort', event.target.value),
-            }),
-            h('input', {
-              type: 'text', value: row.localPort, placeholder: t('localPortPlaceholder'), 'aria-label': t('localPort'),
-              title: t('localPort'), inputMode: 'numeric', spellCheck: false, disabled: busy,
-              onChange: (event) => patchRow(index, 'localPort', event.target.value),
-            }),
-            h('input', {
-              type: 'text', value: row.remoteLog, placeholder: t('remoteLogPlaceholder'), 'aria-label': t('remoteLog'),
-              title: t('remoteLog'), spellCheck: false, disabled: busy,
-              onChange: (event) => patchRow(index, 'remoteLog', event.target.value),
-            })
+          h('div', { className: 'rh-fields' },
+            textField(index, row, 'id', t('id'), { placeholder: t('idPlaceholder') }),
+            textField(index, row, 'label', t('label'), { placeholder: t('labelPlaceholder') }),
+            textField(index, row, 'url', t('url'), { placeholder: t('urlPlaceholder'), wide: true })
           ),
-          h('div', { className: 'rh-grid rh-service' },
-            h('select', {
-              value: row.serviceKind, 'aria-label': t('serviceKind'), title: t('serviceKind'),
-              disabled: busy || !row.sshHost.trim(),
-              onChange: (event) => patchRow(index, 'serviceKind', event.target.value),
-            },
-              h('option', { value: '' }, t('serviceKindAuto')),
-              ...SERVICE_KINDS.map((kind) => h('option', { key: kind, value: kind }, kind))
-            ),
+          h('div', { className: 'rh-fields' },
+            textField(index, row, 'sshHost', t('sshHost'), { placeholder: t('sshHostPlaceholder') }),
+            textField(index, row, 'remotePort', t('remotePort'), { placeholder: t('remotePortPlaceholder'), numeric: true }),
+            textField(index, row, 'localPort', t('localPort'), { placeholder: t('localPortPlaceholder'), numeric: true }),
+            textField(index, row, 'remoteLog', t('remoteLog'), { placeholder: t('remoteLogPlaceholder') })
+          ),
+          h('div', { className: 'rh-fields' },
+            serviceKindField(index, row),
+            textField(index, row, 'serviceUnit', t('serviceUnit'), { placeholder: t('serviceUnitPlaceholder') }),
+            textField(index, row, 'profile', t('profile'), { placeholder: t('profilePlaceholder') }),
+            textField(index, row, 'updateChannel', t('updateChannel'), { placeholder: t('updateChannelPlaceholder') })
+          ),
+          h('label', { className: 'rh-check' },
             h('input', {
-              type: 'text', value: row.serviceUnit, placeholder: t('serviceUnitPlaceholder'), 'aria-label': t('serviceUnit'),
-              title: t('serviceUnit'), spellCheck: false, disabled: busy || !row.sshHost.trim(),
-              onChange: (event) => patchRow(index, 'serviceUnit', event.target.value),
+              type: 'checkbox', checked: row.sidebar !== false, disabled: busy,
+              onChange: (event) => patchRow(index, 'sidebar', event.target.checked),
             }),
-            h('input', {
-              type: 'text', value: row.profile, placeholder: t('profilePlaceholder'), 'aria-label': t('profile'),
-              title: t('profile'), spellCheck: false, disabled: busy || !row.sshHost.trim(),
-              onChange: (event) => patchRow(index, 'profile', event.target.value),
-            }),
-            h('input', {
-              type: 'text', value: row.updateChannel, placeholder: t('updateChannelPlaceholder'), 'aria-label': t('updateChannel'),
-              title: t('updateChannel'), spellCheck: false, disabled: busy || !row.sshHost.trim(),
-              onChange: (event) => patchRow(index, 'updateChannel', event.target.value),
-            })
+            h('span', null, t('showInSidebar'))
           )
         )),
         draft.length === 0 ? h('p', { className: 'rh-empty' }, t('empty')) : null,
@@ -645,25 +692,30 @@ window.__ModuleLoader__.load({
     }
 
     const SETTINGS_CSS = `
-.dsh-remote-hosts-settings{max-width:760px;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:1.6}
+.dsh-remote-hosts-settings{max-width:820px;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:1.6}
 .dsh-remote-hosts-settings p,.dsh-remote-hosts-settings small{color:var(--dsw-alias-label-secondary)}
-.dsh-remote-hosts-settings .rh-card{padding:10px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}
-.dsh-remote-hosts-settings .rh-grid{display:grid;gap:8px;align-items:center;padding:0}
-.dsh-remote-hosts-settings .rh-main{grid-template-columns:minmax(110px,1fr) minmax(110px,1fr) minmax(190px,2fr) auto}
-.dsh-remote-hosts-settings .rh-extra{grid-template-columns:minmax(140px,2fr) minmax(80px,.7fr) minmax(80px,.7fr) minmax(150px,2fr);padding-top:6px}
-.dsh-remote-hosts-settings .rh-service{grid-template-columns:minmax(130px,1fr) minmax(130px,1fr) minmax(110px,.8fr) minmax(110px,.8fr);padding-top:6px}
-.dsh-remote-hosts-settings select{box-sizing:border-box;min-width:0;width:100%;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 9px;font:inherit;color:inherit}
-.dsh-remote-hosts-settings input{box-sizing:border-box;min-width:0;width:100%;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 9px;font:inherit;color:inherit}
+.dsh-remote-hosts-settings .rh-card{margin:12px 0;padding:14px 16px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1)}
+.dsh-remote-hosts-settings .rh-card-head{display:flex;align-items:center;gap:6px;min-width:0}
+.dsh-remote-hosts-settings .rh-card-title{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60%}
+.dsh-remote-hosts-settings .rh-badge{flex:0 0 auto;font-size:11px;line-height:1;padding:3px 7px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary)}
+.dsh-remote-hosts-settings .rh-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:10px}
+.dsh-remote-hosts-settings .rh-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.dsh-remote-hosts-settings .rh-field>span{font-size:11.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dsh-remote-hosts-settings .rh-wide{grid-column:span 2}
+.dsh-remote-hosts-settings .rh-check{display:flex;align-items:center;gap:7px;margin-top:12px;font-size:12.5px;color:var(--dsw-alias-label-secondary);cursor:pointer}
+.dsh-remote-hosts-settings select,.dsh-remote-hosts-settings input:not([type=checkbox]){box-sizing:border-box;min-width:0;width:100%;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px;color:inherit}
+.dsh-remote-hosts-settings input[type=checkbox]{width:auto;margin:0;accent-color:var(--dsw-alias-brand-primary)}
 .dsh-remote-hosts-settings button{padding:6px 12px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;cursor:pointer;font:inherit;color:inherit}
 .dsh-remote-hosts-settings button:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}
 .dsh-remote-hosts-settings button:disabled{opacity:.5;cursor:default}
 .dsh-remote-hosts-settings :focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
-.dsh-remote-hosts-settings .rh-remove{width:32px;padding:6px 0;line-height:1}
-.dsh-remote-hosts-settings .rh-actions{display:flex;gap:8px;align-items:center;margin-top:14px}
-.dsh-remote-hosts-settings .rh-spacer{flex:1}
+.dsh-remote-hosts-settings .rh-icon{width:28px;height:28px;padding:0;line-height:1;font-size:14px;border-radius:7px}
+.dsh-remote-hosts-settings .rh-remove:hover:not(:disabled){color:var(--dsw-alias-state-error-primary)}
+.dsh-remote-hosts-settings .rh-actions{display:flex;gap:8px;align-items:center;margin-top:16px}
+.dsh-remote-hosts-settings .rh-spacer{flex:1;min-width:8px}
 .dsh-remote-hosts-settings .rh-empty{margin:10px 0 0;font-size:12px}
 .dsh-remote-hosts-settings [data-error=true]{color:var(--dsw-alias-state-error-primary)}
-@media(max-width:640px){.dsh-remote-hosts-settings .rh-main,.dsh-remote-hosts-settings .rh-extra,.dsh-remote-hosts-settings .rh-service{grid-template-columns:1fr 1fr}.dsh-remote-hosts-settings .rh-main input:nth-child(3){grid-column:1/-1}.dsh-remote-hosts-settings .rh-remove{grid-column:2;justify-self:end}}
+@media(max-width:720px){.dsh-remote-hosts-settings .rh-fields{grid-template-columns:repeat(2,minmax(0,1fr))}.dsh-remote-hosts-settings .rh-wide{grid-column:span 2}.dsh-remote-hosts-settings .rh-card-title{max-width:45%}}
 `;
 
     function apply(ctx) {
@@ -891,21 +943,24 @@ window.__ModuleLoader__.load({
           }
         };
 
-        // Restart the remote unit through the same streaming channel as sync.
-        // It drops whatever the remote is running, so ask first and reload the
-        // frame afterwards.
-        const restartService = async (server) => {
+        // Start/stop/restart the remote unit through the same streaming channel
+        // as sync. Restart and stop drop whatever the remote is running, so ask
+        // first; a started or restarted service also reloads the frame.
+        const runService = async (server, action) => {
+          const confirmKey = action === 'start' ? 'confirmServiceStart' : action === 'stop' ? 'confirmServiceStop' : 'confirmServiceRestart';
+          const pendingKey = action === 'start' ? 'startingService' : action === 'stop' ? 'stoppingService' : 'restartingService';
+          const doneKey = action === 'start' ? 'serviceStarted' : action === 'stop' ? 'serviceStopped' : 'serviceDone';
           if (typeof window.confirm === 'function'
-            && !window.confirm(translate('confirmServiceRestart', { host: server.label }))) return;
+            && !window.confirm(translate(confirmKey, { host: server.label }))) return;
           const ok = await runAction(
             SERVICE_ROUTE,
-            { host: server.id, action: 'restart' },
-            translate('restartingService'),
+            { host: server.id, action },
+            translate(pendingKey),
             'serviceFailed',
-            translate('serviceDone', { host: server.label }),
+            translate(doneKey, { host: server.label }),
           );
           if (!ok) return;
-          reload(server.id);
+          if (action !== 'stop') reload(server.id);
           pollStatus().catch(() => {});
           readProbe(server, true);
         };
@@ -1049,6 +1104,8 @@ window.__ModuleLoader__.load({
             probeInfo.service && probeInfo.service.state ? probeInfo.service.state : '',
           ].filter(Boolean).join(' · ')
           : (probeEntry && probeEntry.error ? translate('probeUnavailable') : '');
+        const serviceKnown = !!(probeInfo && probeInfo.service && typeof probeInfo.service.active === 'boolean');
+        const serviceActive = serviceKnown && probeInfo.service.active === true;
         const menuItem = (label, run, off) => h('button', {
           key: label, type: 'button', role: 'menuitem', disabled: off === true,
           onClick: () => { setMenuOpen(false); if (off !== true) run(); },
@@ -1164,7 +1221,13 @@ window.__ModuleLoader__.load({
                   menuItem(translate('syncCopy'), () => sync(active, { restart: false }), disabled),
                   menuItem(translate('syncPreview'), () => sync(active, { restart: false, dryRun: true }), disabled),
                   menuItem(translate('probe'), () => readProbe(active, true), !managed || syncState.busy),
-                  menuItem(translate('restartService'), () => restartService(active), !managed || syncState.busy),
+                  menuItem(translate('restartService'), () => runService(active, 'restart'), !managed || syncState.busy),
+                  serviceKnown && !serviceActive
+                    ? menuItem(translate('startService'), () => runService(active, 'start'), !managed || syncState.busy)
+                    : null,
+                  serviceKnown && serviceActive
+                    ? menuItem(translate('stopService'), () => runService(active, 'stop'), !managed || syncState.busy)
+                    : null,
                   menuItem(translate('showLogs'), () => showLogs(active), !managed || syncState.busy),
                   menuItem(translate('reload'), () => reload(active.id), !active),
                   menuItem(translate('external'), () => window.open(frameSrc(active), '_blank', 'noopener'), !active)
@@ -1301,13 +1364,16 @@ window.__ModuleLoader__.load({
         serverDisposers = [];
         servers.forEach((server, index) => {
           const panelId = 'remote-hosts/' + server.id;
-          serverDisposers.push(ctx.slots.inject('sidebar.panellist', () =>
-            ctx.slots.register(
-              { name: 'sidebar.panellist', id: panelId, order: 30 + index, label: () => server.label },
-              () => icon(server)
-            )));
-          // The keyed main entry is what selectPanel() validates; the overlay
-          // reads the selection from the layout store, so it renders nothing.
+          // The row can be hidden from the sidebar without losing the panel:
+          // selectPanel() validates the keyed main entry, so a host toggled off
+          // in the settings is still reachable from there and the overlay switcher.
+          if (server.sidebar !== false) {
+            serverDisposers.push(ctx.slots.inject('sidebar.panellist', () =>
+              ctx.slots.register(
+                { name: 'sidebar.panellist', id: panelId, order: 30 + index, label: () => server.label },
+                () => icon(server)
+              )));
+          }
           serverDisposers.push(ctx.slots.inject('main', () =>
             ctx.slots.register({ name: 'main', key: panelId }, () => null)));
         });
@@ -1434,6 +1500,7 @@ window.__ModuleLoader__.load({
             ctx: remoteCtx,
             store,
             view: props && props.view,
+            onOpen: (id) => openServer(id),
             onSaved: () => { pollStatus().catch(() => {}); },
           });
           for (const [name, key] of [

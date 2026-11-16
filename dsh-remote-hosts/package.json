@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote-hosts",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "Open remote dsh web instances in an overlay over the main area, with a managed ssh tunnel, live connection state, settings sync, and remote dsh updates.",

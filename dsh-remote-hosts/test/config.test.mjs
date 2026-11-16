@@ -71,6 +71,12 @@ test('malformed descriptor fields fall back instead of dropping the row', () => 
   assert.equal(server.updateChannel, '');
 });
 
+test('sidebar visibility defaults to true and persists false', () => {
+  assert.equal(toServer({ id: 'x', url: 'http://127.0.0.1:1/' }).sidebar, true);
+  assert.equal(toServer({ id: 'x', url: 'http://127.0.0.1:1/', sidebar: false }).sidebar, false);
+  assert.equal(toServer({ id: 'y', sshHost: 'host', sidebar: true }).sidebar, true);
+});
+
 test('duplicate ids keep the first row', () => {
   const servers = configuredServers({
     servers: [

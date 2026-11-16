@@ -58,6 +58,9 @@ export function toServer(row) {
     serviceUnit: unit,
     profile: PROFILE_PATTERN.test(rawProfile) ? rawProfile : 'web',
     updateChannel: CHANNEL_PATTERN.test(rawChannel) ? rawChannel : '',
+    // Sidebar visibility is a config choice so a configured host can stay out
+    // of the left column without being deleted.
+    sidebar: row.sidebar !== false,
   };
 }
 

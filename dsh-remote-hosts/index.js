@@ -47,6 +47,7 @@ export const Config = Schema.object({
     serviceUnit: Schema.string().default(''),
     profile: Schema.string().default(''),
     updateChannel: Schema.string().default(''),
+    sidebar: Schema.boolean().default(true),
   }))
     // A hand-edited row that fails the item schema is dropped instead of
     // failing the whole plugin entry; configuredServers() then skips it.
@@ -69,6 +70,7 @@ export const Config = Schema.object({
       serviceUnit: 'systemd unit or launchd label that runs the remote dsh web (default dsh-web).',
       profile: 'Remote dsh profile directory under ~/.dsh/profiles (default web).',
       updateChannel: 'Update target: empty mirrors this app version, otherwise an npm dist-tag (latest, next) or an exact version.',
+      sidebar: 'Show this host as a row in the left sidebar. Hidden hosts stay configured and can be opened from the plugin settings or the overlay switcher.',
     },
   },
   zh: {
@@ -86,6 +88,7 @@ export const Config = Schema.object({
       serviceUnit: '运行远端 dsh web 的 systemd unit 或 launchd label（默认 dsh-web）。',
       profile: '远端 dsh profile 目录名，位于 ~/.dsh/profiles 下（默认 web）。',
       updateChannel: '更新目标：留空跟随本机应用版本，否则填 npm dist-tag（latest、next）或精确版本号。',
+      sidebar: '在左侧栏显示该主机。隐藏后配置仍然保留，可从插件设置或浮层切换器打开。',
     },
   },
 });
@@ -452,6 +455,7 @@ export function apply(ctx, config) {
             label: server.label,
             url: server.url,
             managed: true,
+            sidebar: server.sidebar,
             state: 'offline',
             error: misconfigured,
             proxyUrl: '',
@@ -464,6 +468,7 @@ export function apply(ctx, config) {
           label: server.label,
           url: server.url,
           managed: false,
+          sidebar: server.sidebar,
           state: 'external',
           error: '',
           proxyUrl: server.url,
@@ -471,7 +476,7 @@ export function apply(ctx, config) {
           updatedAt: 0,
         };
       }
-      return { id: server.id, label: server.label, url: server.url, managed: true, ...link.status() };
+      return { id: server.id, label: server.label, url: server.url, managed: true, sidebar: server.sidebar, ...link.status() };
     });
   };
 

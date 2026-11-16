@@ -55,6 +55,7 @@ test('an external server is described without a managed link', async () => {
     assert.equal(payload.servers.length, 1);
     assert.equal(payload.servers[0].id, 'demo');
     assert.equal(payload.servers[0].managed, false);
+    assert.equal(payload.servers[0].sidebar, true);
     assert.equal(payload.servers[0].state, 'external');
     assert.equal(payload.servers[0].proxyUrl, 'http://127.0.0.1:27994/');
     assert.equal(payload.servers[0].probe, null);
