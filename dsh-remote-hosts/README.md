@@ -128,6 +128,10 @@ In the app the same settings are a compact card list:
 - the pin icon toggles the left-sidebar row without deleting the host,
   **Show all in sidebar** marks every card visible again, and the arrows reorder
   rows;
+- every saved SSH card has **测试连接**: it probes the saved configuration and
+  writes the dsh version, service state and port HTTP into the card, or the
+  probe failure reason when it cannot reach the host. A new card must be saved
+  first; URL-only rows are not probed.
 - the remaining card actions open the host, or remove the card.
 
 Saving re-applies the sidebar registration immediately; no restart is needed

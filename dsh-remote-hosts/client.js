@@ -152,6 +152,16 @@ window.__ModuleLoader__.load({
       discard: 'Discard changes',
       saved: 'Saved.',
       saveFailed: 'Could not save:',
+      test: 'Test connection',
+      testing: 'Testing…',
+      testTitle: 'Probe the saved configuration of this host',
+      testSavedOnly: 'Save this host before testing it.',
+      testManagedOnly: 'Only SSH-managed hosts can be tested.',
+      testFailed: 'Test failed: {detail}',
+      serviceUp: 'service active',
+      serviceDown: 'service {state}',
+      serviceUnknown: 'service unknown',
+      portUnreachable: 'port not answering',
       loading: 'Loading settings…',
       retry: 'Retry',
       empty: 'No servers configured yet.',
@@ -282,6 +292,16 @@ window.__ModuleLoader__.load({
       discard: '放弃修改',
       saved: '已保存。',
       saveFailed: '保存失败：',
+      test: '测试连接',
+      testing: '测试中…',
+      testTitle: '检测该主机已保存的配置',
+      testSavedOnly: '先保存该主机再测试。',
+      testManagedOnly: '只有 SSH 托管的主机可以测试。',
+      testFailed: '测试失败：{detail}',
+      serviceUp: '服务运行中',
+      serviceDown: '服务 {state}',
+      serviceUnknown: '服务状态未知',
+      portUnreachable: '端口无响应',
       loading: '正在加载设置…',
       retry: '重试',
       empty: '尚未配置服务器。',
@@ -446,6 +466,9 @@ window.__ModuleLoader__.load({
       }),
       h('path', { d: 'M4.6 11.4 2 14', stroke: 'currentColor', strokeWidth: 1.2, strokeLinecap: 'round' })
     );
+    // One line of tool/probe output for inline status text.
+    const flatText = (value) => String(value || '').trim().split('\n').map((line) => line.trim()).filter(Boolean).slice(-2).join(' / ');
+
     const parsePort = (value, min, max) => {
       const text = String(value === undefined || value === null ? '' : value).trim();
       if (!text) return null;
@@ -576,6 +599,8 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false);
       const [notice, setNotice] = React.useState('');
       const [failed, setFailed] = React.useState(false);
+      // id -> { busy, at, info, error } from the last 测试连接 on that card.
+      const [tests, setTests] = React.useState({});
       const alive = React.useRef(true);
       const nextKey = React.useRef(0);
 
@@ -614,6 +639,14 @@ window.__ModuleLoader__.load({
         setNotice('');
       };
       const removeRow = (index) => {
+        const removed = draft && draft[index];
+        if (removed && removed.id.trim()) {
+          setTests((current) => {
+            const next = { ...current };
+            delete next[removed.id.trim()];
+            return next;
+          });
+        }
         setDraft((current) => current.filter((_, i) => i !== index));
         setNotice('');
       };
@@ -670,6 +703,77 @@ window.__ModuleLoader__.load({
         }
         return row.url.trim() || t('notConfigured');
       };
+      // The probe route reads the saved config, so a card can only be tested
+      // after it has an id the Host knows. This is the same forced probe the
+      // overlay uses, without opening the overlay or the tunnel.
+      const savedIds = new Set((snapshot.servers || []).map((server) => server.id));
+      const testHost = async (row) => {
+        const id = row.id.trim();
+        if (!id) return;
+        setTests((current) => ({ ...current, [id]: { busy: true, info: null, error: '' } }));
+        try {
+          const response = await fetch(PROBE_ROUTE, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ host: id, force: true }),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || payload.ok !== true) {
+            throw new Error(payload.error || t('httpStatus', { status: response.status }));
+          }
+          if (!alive.current) return;
+          setTests((current) => ({
+            ...current,
+            [id]: { busy: false, at: Number(payload.at) || Date.now(), info: payload.info || null, error: '' },
+          }));
+        } catch (error) {
+          if (!alive.current) return;
+          setTests((current) => ({
+            ...current,
+            [id]: { busy: false, info: null, error: flatText(error && error.message ? error.message : error) },
+          }));
+        }
+      };
+      const testTone = (result) => {
+        if (!result || result.busy) return '';
+        if (result.error) return ' rh-bad';
+        const http = result.info && result.info.port && result.info.port.http;
+        return http && http !== '000' ? ' rh-ok' : ' rh-warn';
+      };
+      const testSummary = (result) => {
+        if (!result || result.busy) return '';
+        if (result.error) return t('testFailed', { detail: result.error });
+        const info = result.info;
+        if (!info) return '';
+        const version = info.dsh && info.dsh.version ? 'dsh ' + info.dsh.version : '';
+        const state = info.service && info.service.state;
+        const service = state === 'active' || state === 'running'
+          ? t('serviceUp')
+          : state && state !== 'unknown' ? t('serviceDown', { state }) : t('serviceUnknown');
+        const http = info.port && info.port.http;
+        const port = http && http !== '000' ? 'HTTP ' + http : t('portUnreachable');
+        return [version, service, port].filter(Boolean).join(' · ');
+      };
+      const testRow = (row) => {
+        const id = row.id.trim();
+        const saved = savedIds.has(id);
+        const result = tests[id] || null;
+        const canTest = Boolean(id && saved && row.sshHost.trim());
+        const summary = testSummary(result);
+        return h('div', { className: 'rh-testrow', key: 'test' },
+          h('button', {
+            type: 'button',
+            className: 'rh-test-btn',
+            disabled: busy || !canTest || Boolean(result && result.busy),
+            title: !row.sshHost.trim()
+              ? t('testManagedOnly')
+              : saved ? t('testTitle') : t('testSavedOnly'),
+            onClick: () => { if (canTest) testHost(row); },
+          }, result && result.busy ? t('testing') : t('test')),
+          summary
+            ? h('span', { className: 'rh-test-state' + testTone(result), title: summary }, summary)
+            : null);
+      };
       const discard = async () => {
         setNotice('');
         setFailed(false);
@@ -678,6 +782,7 @@ window.__ModuleLoader__.load({
         const current = store.getSnapshot();
         setDraft((current.servers || []).map(makeRow));
         setRevision(current.revision);
+        setTests({});
       };
       const save = async (event) => {
         event.preventDefault();
@@ -691,6 +796,7 @@ window.__ModuleLoader__.load({
           if (!alive.current) return;
           setDraft(values.map(makeRow));
           setRevision(store.getSnapshot().revision);
+          setTests({});
           setNotice(t('saved'));
           if (typeof onSaved === 'function') onSaved();
         } catch (error) {
@@ -777,6 +883,7 @@ window.__ModuleLoader__.load({
               : h('div', { className: 'rh-primary-fields' },
                 textField(index, row, 'label', t('label'), { placeholder: t('labelPlaceholder') }),
                 textField(index, row, 'url', t('url'), { placeholder: t('urlPlaceholder') })),
+            mode === 'ssh' ? testRow(row) : null,
             h('details', { className: 'rh-adv' },
               h('summary', null, t('advanced')),
               h('div', { className: 'rh-fields' },
@@ -825,6 +932,13 @@ window.__ModuleLoader__.load({
 .dsh-remote-hosts-settings .rh-segment button{padding:4px 12px;border:0;border-radius:7px;background:transparent;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer}
 .dsh-remote-hosts-settings .rh-segment button.rh-seg-on{background:var(--dsw-alias-bg-base,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-primary);box-shadow:0 1px 2px rgba(0,0,0,.12)}
 .dsh-remote-hosts-settings .rh-primary-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
+.dsh-remote-hosts-settings .rh-testrow{display:flex;align-items:center;gap:8px;margin-top:10px;min-width:0}
+.dsh-remote-hosts-settings .rh-test-btn{padding:4px 10px;font-size:12px}
+.dsh-remote-hosts-settings .rh-test-state{display:inline-flex;align-items:center;gap:6px;min-width:0;font-size:11.5px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-remote-hosts-settings .rh-test-state::before{content:'';flex:0 0 auto;width:6px;height:6px;border-radius:50%;background:currentColor}
+.dsh-remote-hosts-settings .rh-test-state.rh-ok{color:var(--dsw-alias-state-success-primary,#2f9e44)}
+.dsh-remote-hosts-settings .rh-test-state.rh-warn{color:var(--dsw-alias-state-warning-primary,#f08c00)}
+.dsh-remote-hosts-settings .rh-test-state.rh-bad{color:var(--dsw-alias-state-error-primary,#d9534f)}
 .dsh-remote-hosts-settings .rh-adv{margin-top:12px;padding-top:8px;border-top:1px dashed var(--dsw-alias-border-l1)}
 .dsh-remote-hosts-settings .rh-adv>summary{list-style:none;cursor:pointer;font-size:12px;color:var(--dsw-alias-label-secondary);user-select:none}
 .dsh-remote-hosts-settings .rh-adv>summary::-webkit-details-marker{display:none}
