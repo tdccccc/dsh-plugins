@@ -15,17 +15,19 @@ window.__ModuleLoader__.load({
     const SYNC_ROUTE = '/api/remote-hosts/sync';
     const UPDATE_ROUTE = '/api/remote-hosts/update';
     const RECONNECT_ROUTE = '/api/remote-hosts/reconnect';
+    const PROBE_ROUTE = '/api/remote-hosts/probe';
+    const SERVICE_ROUTE = '/api/remote-hosts/service';
+    const LOGS_ROUTE = '/api/remote-hosts/logs';
     const LAST_HOST_KEY = 'dsh-remote-hosts:last-host';
     const OPEN_KEY = 'dsh-remote-hosts:open';
     const readStore = (key) => { try { return window.localStorage.getItem(key); } catch { return null; } };
     const writeStore = (key, value) => { try { window.localStorage.setItem(key, value); } catch {} };
 
-    // Used until /api/remote-hosts/status answers, and whenever it fails.
-    const FALLBACK_SERVERS = [
-      { id: 'a100-146', label: 'A100-146', url: 'http://127.0.0.1:27994/' },
-    ];
-
     const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/i;
+    const SERVICE_KINDS = ['systemd-user', 'launchd-user', 'command', 'external'];
+    const UNIT_PATTERN = /^[A-Za-z0-9@._:-]{1,128}$/;
+    const PROFILE_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+    const CHANNEL_PATTERN = /^[A-Za-z0-9._+-]{1,64}$/;
 
     const EN = {
       back: '← Local conversation',
@@ -65,16 +67,51 @@ window.__ModuleLoader__.load({
       updateFailed: 'Update failed: {detail}',
       updated: 'dsh on {host} is now {version}',
       updatedLatest: 'dsh on {host} is up to date',
+      more: 'More actions',
+      probe: 'Check remote',
+      restartService: 'Restart remote service',
+      showLogs: 'Show remote log',
+      loadingLogs: 'Reading remote log…',
+      logsFailed: 'Could not read the remote log: {detail}',
+      confirmServiceRestart: 'Restart dsh-web on {host}?\n\nSessions running on the remote are interrupted.',
+      restartingService: 'Restarting remote service…',
+      serviceFailed: 'Service action failed: {detail}',
+      serviceDone: 'Remote service on {host} restarted',
+      probeUnavailable: 'remote check failed',
       confirmUpdate: 'Update dsh on {host}{to} and restart the remote dsh-web?\n\nThe update downloads packages and restarts the service, interrupting sessions running on the remote.',
       toVersion: ' to {version}',
       summary: 'Remote servers shown in the sidebar.',
-      intro: 'Servers shown in the sidebar. The same list authorizes the sync route, so keep ids stable.',
+      intro: 'Servers shown in the sidebar and the overlay switcher. The same list authorizes sync, update and service requests, so keep ids stable.',
       id: 'ID',
       label: 'Label',
       url: 'URL',
+      sshHost: 'SSH host',
+      remotePort: 'Remote port',
+      localPort: 'Local port',
+      remoteLog: 'Remote log',
       idPlaceholder: 'a100-146',
       labelPlaceholder: 'A100-146',
-      urlPlaceholder: 'http://127.0.0.1:27994/',
+      urlPlaceholder: 'http://127.0.0.1:27994/ (optional with SSH host)',
+      sshHostPlaceholder: 'user@host',
+      remotePortPlaceholder: '27993',
+      localPortPlaceholder: '0 (auto)',
+      remoteLogPlaceholder: '~/.dsh/web-27993.log',
+      serviceKind: 'Service kind',
+      serviceKindAuto: 'auto (systemd-user)',
+      serviceUnit: 'Service unit',
+      serviceUnitPlaceholder: 'dsh-web',
+      profile: 'Remote profile',
+      profilePlaceholder: 'web',
+      badServiceKind: 'Unknown service kind.',
+      badUnit: 'Service unit may contain letters, digits, @ . _ : - only.',
+      badProfile: 'Profile name may contain letters, digits, . _ - only.',
+      updateChannel: 'Update target',
+      updateChannelPlaceholder: 'app version',
+      badChannel: 'Update target may contain letters, digits, . _ + - only.',
+      needsTarget: 'Every server needs a URL or an SSH host.',
+      badPort: 'Ports must be numbers: remote 1-65535, local 0-65535.',
+      switchHost: 'Switch host',
+      noServers: 'No servers configured yet. Add one in the plugin settings.',
       add: 'Add server',
       remove: 'Remove',
       save: 'Save',
@@ -84,8 +121,8 @@ window.__ModuleLoader__.load({
       saveFailed: 'Could not save:',
       loading: 'Loading settings…',
       retry: 'Retry',
-      empty: 'No servers configured; the built-in default server is used.',
-      hint: 'An empty list uses the built-in default. Ids must be unique and contain only letters, digits, and dashes. URLs must start with http:// or https://. sshHost is preserved; set it in the profile patch when the SSH host differs from the id.',
+      empty: 'No servers configured yet.',
+      hint: 'Rows with an SSH host are fully managed: the plugin owns the tunnel and auth proxy, reads the login token from the remote log, and can sync settings or update dsh there. A URL is required only for hosts opened directly. Ports default to 27993 remote and 0 local (auto); the remote log defaults to ~/.dsh/web-<port>.log.',
       row: 'Row',
       idRequired: 'Every server needs an id.',
       badId: 'Use letters, digits, and dashes, up to 63 characters.',
@@ -131,16 +168,51 @@ window.__ModuleLoader__.load({
       updateFailed: '更新失败：{detail}',
       updated: '{host} 上的 dsh 已是 {version}',
       updatedLatest: '{host} 上的 dsh 已是最新版本',
+      more: '更多操作',
+      probe: '检测远端',
+      restartService: '重启远端服务',
+      showLogs: '查看远端日志',
+      loadingLogs: '读取远端日志中…',
+      logsFailed: '读取远端日志失败：{detail}',
+      confirmServiceRestart: '重启 {host} 上的 dsh-web？\n\n会中断远端正在运行的会话。',
+      restartingService: '重启远端服务中…',
+      serviceFailed: '服务操作失败：{detail}',
+      serviceDone: '{host} 上的远端服务已重启',
+      probeUnavailable: '远端检测失败',
       confirmUpdate: '更新 {host} 上的 dsh{to} 并重启远端 dsh-web？\n\n更新会下载依赖并重启服务，中断远端正在运行的会话。',
       toVersion: ' 到 {version}',
       summary: '侧边栏中的远程服务器。',
-      intro: '显示在侧边栏的服务器。同一份列表也决定同步接口允许的主机，请保持 id 稳定。',
+      intro: '显示在侧边栏和浮层切换器中的服务器。同一份列表也决定同步、更新和服务接口允许的主机，请保持 id 稳定。',
       id: 'ID',
       label: '名称',
       url: '地址',
+      sshHost: 'SSH 主机',
+      remotePort: '远端端口',
+      localPort: '本地端口',
+      remoteLog: '远端日志',
       idPlaceholder: 'a100-146',
       labelPlaceholder: 'A100-146',
-      urlPlaceholder: 'http://127.0.0.1:27994/',
+      urlPlaceholder: 'http://127.0.0.1:27994/（有 SSH 主机时可留空）',
+      sshHostPlaceholder: 'user@host',
+      remotePortPlaceholder: '27993',
+      localPortPlaceholder: '0（自动）',
+      remoteLogPlaceholder: '~/.dsh/web-27993.log',
+      serviceKind: '服务类型',
+      serviceKindAuto: '自动（systemd-user）',
+      serviceUnit: '服务单元',
+      serviceUnitPlaceholder: 'dsh-web',
+      profile: '远端 profile',
+      profilePlaceholder: 'web',
+      badServiceKind: '未知的服务类型。',
+      badUnit: '服务单元只能包含字母、数字和 @ . _ : -。',
+      badProfile: 'profile 名只能包含字母、数字和 . _ -。',
+      updateChannel: '更新目标',
+      updateChannelPlaceholder: '跟随本机',
+      badChannel: '更新目标只能包含字母、数字和 . _ + -。',
+      needsTarget: '每台服务器至少需要地址或 SSH 主机。',
+      badPort: '端口必须是数字：远端 1-65535，本地 0-65535。',
+      switchHost: '切换主机',
+      noServers: '尚未配置服务器，请在插件设置中添加。',
       add: '添加服务器',
       remove: '删除',
       save: '保存',
@@ -150,8 +222,8 @@ window.__ModuleLoader__.load({
       saveFailed: '保存失败：',
       loading: '正在加载设置…',
       retry: '重试',
-      empty: '尚未配置服务器，将使用内置的默认服务器。',
-      hint: '列表为空时使用内置默认服务器。id 必须唯一，只能包含字母、数字和连字符。地址必须以 http:// 或 https:// 开头。sshHost 会被保留；当 SSH 主机与 id 不同时，请在 profile patch 中设置。',
+      empty: '尚未配置服务器。',
+      hint: '填写 SSH 主机的行由插件完全管理：自动建立隧道和鉴权代理、从远端日志读取登录 token，并可同步配置或更新 dsh。只有直接打开的地址才必须填 URL。远端端口默认 27993，本地端口 0 表示自动，远端日志默认 ~/.dsh/web-<port>.log。',
       row: '行',
       idRequired: '每台服务器都需要一个 id。',
       badId: '只能使用字母、数字和连字符，最多 63 个字符。',
@@ -184,8 +256,8 @@ window.__ModuleLoader__.load({
       return sshHost ? { id, label, url, sshHost, managed } : { id, label, url, managed };
     };
 
-    // The Host half is authoritative; this copy only guards the fallback and
-    // the list rendered while the request is in flight.
+    // The Host half is authoritative; this copy is what the sidebar rendered
+    // while the request is in flight.
     const normalizeServers = (value) => {
       const rows = Array.isArray(value) ? value : [];
       const servers = [];
@@ -196,7 +268,7 @@ window.__ModuleLoader__.load({
         seen.add(server.id);
         servers.push(server);
       }
-      return servers.length ? servers : FALLBACK_SERVERS.map((server) => ({ ...server }));
+      return servers;
     };
 
     const sameServers = (left, right) =>
@@ -224,7 +296,7 @@ window.__ModuleLoader__.load({
       visited: new Set(),
       reload: {},
       inset: 280,
-      servers: normalizeServers(FALLBACK_SERVERS),
+      servers: normalizeServers([]),
       // Version of the desktop app's own dsh, sent by the Host half; the update
       // confirmation names it, and an empty value means the host falls back to
       // the latest published release.
@@ -272,14 +344,32 @@ window.__ModuleLoader__.load({
         h('circle', { cx: 11.5, cy: 8, r: 1.2, fill: 'currentColor' })
       );
 
+    // Form rows are strings end to end, even for the numeric fields, so editing
+    // cannot turn a port into NaN between keystrokes. Host-side toServer() owns
+    // the numbers and their defaults.
+    const textOf = (value) => (value === undefined || value === null ? '' : String(value));
     const copyServer = (value) => {
       const row = value && typeof value === 'object' ? value : {};
       return {
-        id: typeof row.id === 'string' ? row.id : '',
-        label: typeof row.label === 'string' ? row.label : '',
-        url: typeof row.url === 'string' ? row.url : '',
-        sshHost: typeof row.sshHost === 'string' ? row.sshHost : '',
+        id: textOf(row.id),
+        label: textOf(row.label),
+        url: textOf(row.url),
+        sshHost: textOf(row.sshHost),
+        remotePort: textOf(row.remotePort),
+        localPort: textOf(row.localPort),
+        remoteLog: textOf(row.remoteLog),
+        serviceKind: textOf(row.serviceKind),
+        serviceUnit: textOf(row.serviceUnit),
+        profile: textOf(row.profile),
+        updateChannel: textOf(row.updateChannel),
       };
+    };
+    const parsePort = (value, min, max) => {
+      const text = String(value === undefined || value === null ? '' : value).trim();
+      if (!text) return null;
+      if (!/^[0-9]+$/.test(text)) return NaN;
+      const number = Number(text);
+      return number >= min && number <= max ? number : NaN;
     };
 
     // Native Plugins page form. It edits the Host Config through the settings
@@ -348,18 +438,42 @@ window.__ModuleLoader__.load({
       const values = [];
       const ids = new Set();
       draft.forEach((row, index) => {
-        if (!row.id.trim() && !row.label.trim() && !row.url.trim() && !row.sshHost.trim()) return;
+        const sshHost = row.sshHost.trim();
+        const rawUrl = row.url.trim();
+        if (!row.id.trim() && !row.label.trim() && !rawUrl && !sshHost) return;
         const where = t('row') + ' ' + (index + 1) + ': ';
         const id = row.id.trim();
         if (!id) throw new Error(where + t('idRequired'));
         if (!ID_PATTERN.test(id)) throw new Error(where + t('badId'));
         if (ids.has(id)) throw new Error(where + t('duplicateId') + ' ' + id);
         ids.add(id);
-        const url = parseHttpUrl(row.url);
-        if (!url) throw new Error(where + t('badUrl'));
+        const url = rawUrl ? parseHttpUrl(rawUrl) : '';
+        if (rawUrl && !url) throw new Error(where + t('badUrl'));
+        // A managed host reaches the remote through its proxy, so its URL is
+        // optional; without either target the row could never open anything.
+        if (!url && !sshHost) throw new Error(where + t('needsTarget'));
+        const remotePort = parsePort(row.remotePort, 1, 65535);
+        const localPort = parsePort(row.localPort, 0, 65535);
+        if (Number.isNaN(remotePort) || Number.isNaN(localPort)) throw new Error(where + t('badPort'));
+        const serviceKind = row.serviceKind.trim();
+        if (sshHost && serviceKind && !SERVICE_KINDS.includes(serviceKind)) throw new Error(where + t('badServiceKind'));
+        const serviceUnit = row.serviceUnit.trim();
+        if (serviceUnit && !UNIT_PATTERN.test(serviceUnit)) throw new Error(where + t('badUnit'));
+        const profile = row.profile.trim();
+        if (profile && !PROFILE_PATTERN.test(profile)) throw new Error(where + t('badProfile'));
+        const updateChannel = row.updateChannel.trim();
+        if (updateChannel && !CHANNEL_PATTERN.test(updateChannel)) throw new Error(where + t('badChannel'));
         const label = row.label.trim() || id;
-        const sshHost = row.sshHost.trim();
-        values.push(sshHost ? { id, label, url, sshHost } : { id, label, url });
+        const value = { id, label, url };
+        if (sshHost) value.sshHost = sshHost;
+        if (remotePort !== null) value.remotePort = remotePort;
+        if (localPort !== null) value.localPort = localPort;
+        if (row.remoteLog.trim()) value.remoteLog = row.remoteLog.trim();
+        if (sshHost && serviceKind) value.serviceKind = serviceKind;
+        if (sshHost && serviceUnit) value.serviceUnit = serviceUnit;
+        if (sshHost && profile) value.profile = profile;
+        if (sshHost && updateChannel) value.updateChannel = updateChannel;
+        values.push(value);
       });
       return values;
     }
@@ -377,13 +491,7 @@ window.__ModuleLoader__.load({
 
       const makeRow = (server) => {
         nextKey.current += 1;
-        return {
-          key: nextKey.current,
-          id: typeof server.id === 'string' ? server.id : '',
-          label: typeof server.label === 'string' ? server.label : '',
-          url: typeof server.url === 'string' ? server.url : '',
-          sshHost: typeof server.sshHost === 'string' ? server.sshHost : '',
-        };
+        return { ...copyServer(server), key: nextKey.current };
       };
 
       React.useEffect(() => {
@@ -455,32 +563,76 @@ window.__ModuleLoader__.load({
         h('style', null, SETTINGS_CSS),
         h('p', null, t('intro')),
         snapshot.error ? h('p', { role: 'alert' }, snapshot.error) : null,
-        h('div', { className: 'rh-grid rh-head' },
-          h('span', null, t('id')),
-          h('span', null, t('label')),
-          h('span', null, t('url')),
-          h('span', null, '')),
-        ...draft.map((row, index) => h('div', { className: 'rh-grid', key: row.key },
-          h('input', {
-            type: 'text', value: row.id, placeholder: t('idPlaceholder'), 'aria-label': t('id'),
-            spellCheck: false, disabled: busy,
-            onChange: (event) => patchRow(index, 'id', event.target.value),
-          }),
-          h('input', {
-            type: 'text', value: row.label, placeholder: t('labelPlaceholder'), 'aria-label': t('label'),
-            disabled: busy,
-            onChange: (event) => patchRow(index, 'label', event.target.value),
-          }),
-          h('input', {
-            type: 'text', value: row.url, placeholder: t('urlPlaceholder'), 'aria-label': t('url'),
-            spellCheck: false, disabled: busy,
-            onChange: (event) => patchRow(index, 'url', event.target.value),
-          }),
-          h('button', {
-            type: 'button', className: 'rh-remove', disabled: busy,
-            title: t('remove'), 'aria-label': t('remove'),
-            onClick: () => removeRow(index),
-          }, '×')
+        ...draft.map((row, index) => h('div', { className: 'rh-card', key: row.key },
+          h('div', { className: 'rh-grid rh-main' },
+            h('input', {
+              type: 'text', value: row.id, placeholder: t('idPlaceholder'), 'aria-label': t('id'),
+              title: t('id'), spellCheck: false, disabled: busy,
+              onChange: (event) => patchRow(index, 'id', event.target.value),
+            }),
+            h('input', {
+              type: 'text', value: row.label, placeholder: t('labelPlaceholder'), 'aria-label': t('label'),
+              title: t('label'), disabled: busy,
+              onChange: (event) => patchRow(index, 'label', event.target.value),
+            }),
+            h('input', {
+              type: 'text', value: row.url, placeholder: t('urlPlaceholder'), 'aria-label': t('url'),
+              title: t('url'), spellCheck: false, disabled: busy,
+              onChange: (event) => patchRow(index, 'url', event.target.value),
+            }),
+            h('button', {
+              type: 'button', className: 'rh-remove', disabled: busy,
+              title: t('remove'), 'aria-label': t('remove'),
+              onClick: () => removeRow(index),
+            }, '×')
+          ),
+          h('div', { className: 'rh-grid rh-extra' },
+            h('input', {
+              type: 'text', value: row.sshHost, placeholder: t('sshHostPlaceholder'), 'aria-label': t('sshHost'),
+              title: t('sshHost'), spellCheck: false, disabled: busy,
+              onChange: (event) => patchRow(index, 'sshHost', event.target.value),
+            }),
+            h('input', {
+              type: 'text', value: row.remotePort, placeholder: t('remotePortPlaceholder'), 'aria-label': t('remotePort'),
+              title: t('remotePort'), inputMode: 'numeric', spellCheck: false, disabled: busy,
+              onChange: (event) => patchRow(index, 'remotePort', event.target.value),
+            }),
+            h('input', {
+              type: 'text', value: row.localPort, placeholder: t('localPortPlaceholder'), 'aria-label': t('localPort'),
+              title: t('localPort'), inputMode: 'numeric', spellCheck: false, disabled: busy,
+              onChange: (event) => patchRow(index, 'localPort', event.target.value),
+            }),
+            h('input', {
+              type: 'text', value: row.remoteLog, placeholder: t('remoteLogPlaceholder'), 'aria-label': t('remoteLog'),
+              title: t('remoteLog'), spellCheck: false, disabled: busy,
+              onChange: (event) => patchRow(index, 'remoteLog', event.target.value),
+            })
+          ),
+          h('div', { className: 'rh-grid rh-service' },
+            h('select', {
+              value: row.serviceKind, 'aria-label': t('serviceKind'), title: t('serviceKind'),
+              disabled: busy || !row.sshHost.trim(),
+              onChange: (event) => patchRow(index, 'serviceKind', event.target.value),
+            },
+              h('option', { value: '' }, t('serviceKindAuto')),
+              ...SERVICE_KINDS.map((kind) => h('option', { key: kind, value: kind }, kind))
+            ),
+            h('input', {
+              type: 'text', value: row.serviceUnit, placeholder: t('serviceUnitPlaceholder'), 'aria-label': t('serviceUnit'),
+              title: t('serviceUnit'), spellCheck: false, disabled: busy || !row.sshHost.trim(),
+              onChange: (event) => patchRow(index, 'serviceUnit', event.target.value),
+            }),
+            h('input', {
+              type: 'text', value: row.profile, placeholder: t('profilePlaceholder'), 'aria-label': t('profile'),
+              title: t('profile'), spellCheck: false, disabled: busy || !row.sshHost.trim(),
+              onChange: (event) => patchRow(index, 'profile', event.target.value),
+            }),
+            h('input', {
+              type: 'text', value: row.updateChannel, placeholder: t('updateChannelPlaceholder'), 'aria-label': t('updateChannel'),
+              title: t('updateChannel'), spellCheck: false, disabled: busy || !row.sshHost.trim(),
+              onChange: (event) => patchRow(index, 'updateChannel', event.target.value),
+            })
+          )
         )),
         draft.length === 0 ? h('p', { className: 'rh-empty' }, t('empty')) : null,
         h('div', { className: 'rh-actions' },
@@ -495,8 +647,12 @@ window.__ModuleLoader__.load({
     const SETTINGS_CSS = `
 .dsh-remote-hosts-settings{max-width:760px;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:1.6}
 .dsh-remote-hosts-settings p,.dsh-remote-hosts-settings small{color:var(--dsw-alias-label-secondary)}
-.dsh-remote-hosts-settings .rh-grid{display:grid;grid-template-columns:minmax(110px,1fr) minmax(110px,1fr) minmax(190px,2fr) auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}
-.dsh-remote-hosts-settings .rh-head{padding-top:0;color:var(--dsw-alias-label-secondary);font-size:12px}
+.dsh-remote-hosts-settings .rh-card{padding:10px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.dsh-remote-hosts-settings .rh-grid{display:grid;gap:8px;align-items:center;padding:0}
+.dsh-remote-hosts-settings .rh-main{grid-template-columns:minmax(110px,1fr) minmax(110px,1fr) minmax(190px,2fr) auto}
+.dsh-remote-hosts-settings .rh-extra{grid-template-columns:minmax(140px,2fr) minmax(80px,.7fr) minmax(80px,.7fr) minmax(150px,2fr);padding-top:6px}
+.dsh-remote-hosts-settings .rh-service{grid-template-columns:minmax(130px,1fr) minmax(130px,1fr) minmax(110px,.8fr) minmax(110px,.8fr);padding-top:6px}
+.dsh-remote-hosts-settings select{box-sizing:border-box;min-width:0;width:100%;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 9px;font:inherit;color:inherit}
 .dsh-remote-hosts-settings input{box-sizing:border-box;min-width:0;width:100%;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 9px;font:inherit;color:inherit}
 .dsh-remote-hosts-settings button{padding:6px 12px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;cursor:pointer;font:inherit;color:inherit}
 .dsh-remote-hosts-settings button:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}
@@ -507,7 +663,7 @@ window.__ModuleLoader__.load({
 .dsh-remote-hosts-settings .rh-spacer{flex:1}
 .dsh-remote-hosts-settings .rh-empty{margin:10px 0 0;font-size:12px}
 .dsh-remote-hosts-settings [data-error=true]{color:var(--dsw-alias-state-error-primary)}
-@media(max-width:640px){.dsh-remote-hosts-settings .rh-grid{grid-template-columns:1fr 1fr}.dsh-remote-hosts-settings .rh-grid input:nth-child(3){grid-column:1/-1}.dsh-remote-hosts-settings .rh-remove{grid-column:2;justify-self:end}}
+@media(max-width:640px){.dsh-remote-hosts-settings .rh-main,.dsh-remote-hosts-settings .rh-extra,.dsh-remote-hosts-settings .rh-service{grid-template-columns:1fr 1fr}.dsh-remote-hosts-settings .rh-main input:nth-child(3){grid-column:1/-1}.dsh-remote-hosts-settings .rh-remove{grid-column:2;justify-self:end}}
 `;
 
     function apply(ctx) {
@@ -539,8 +695,11 @@ window.__ModuleLoader__.load({
         const active = servers.find((server) => selected === 'remote-hosts/' + server.id) || null;
         const [syncState, setSyncState] = React.useState({ busy: false, text: '', error: false });
         const [log, setLog] = React.useState({ open: false, lines: [] });
+        const [probe, setProbe] = React.useState({ id: '', at: 0, info: null, error: '' });
+        const [menuOpen, setMenuOpen] = React.useState(false);
         const logRef = React.useRef(null);
         const abortRef = React.useRef(null);
+        const menuRef = React.useRef(null);
         const lastToggle = React.useRef(0);
 
         React.useEffect(() => {
@@ -551,6 +710,18 @@ window.__ModuleLoader__.load({
         React.useEffect(() => () => {
           if (abortRef.current) abortRef.current.abort();
         }, []);
+
+        // The dropdown closes on any mousedown outside it; Escape is handled by
+        // the same document listener for keyboard users.
+        React.useEffect(() => {
+          if (!menuOpen) return undefined;
+          const close = (event) => {
+            if (menuRef.current && menuRef.current.contains(event.target)) return;
+            setMenuOpen(false);
+          };
+          document.addEventListener('mousedown', close, true);
+          return () => document.removeEventListener('mousedown', close, true);
+        }, [menuOpen]);
 
         const flat = (value) => String(value || '').trim().split('\n').filter((line) => line.trim()).slice(-3).join(' / ');
 
@@ -665,7 +836,10 @@ window.__ModuleLoader__.load({
                 : translate('syncedNoRestart', { host: server.label }),
           );
           if (!ok) return;
-          if (restart && !dryRun) reload(server.id);
+          if (restart && !dryRun) {
+            reload(server.id);
+            readProbe(server, true);
+          }
           pollStatus().catch(() => {});
         };
 
@@ -688,6 +862,72 @@ window.__ModuleLoader__.load({
           if (!ok) return;
           reload(server.id);
           pollStatus().catch(() => {});
+          readProbe(server, true);
+        };
+
+        // Read the remote service/version summary. A probe error stays in the
+        // probe line instead of replacing the last sync/update message.
+        const readProbe = async (server, force) => {
+          try {
+            const response = await fetch(PROBE_ROUTE, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ host: server.id, force: force === true }),
+            });
+            const payload = await response.json().catch(() => ({}));
+            const ok = response.ok && payload.ok === true;
+            const next = {
+              id: server.id,
+              at: Number(payload.at) || Date.now(),
+              info: ok ? payload.info || null : null,
+              error: ok ? '' : flat(payload.error || translate('httpStatus', { status: response.status })),
+            };
+            setProbe(next);
+            return next;
+          } catch (err) {
+            const next = { id: server.id, at: Date.now(), info: null, error: flat(err && err.message ? err.message : String(err)) };
+            setProbe(next);
+            return next;
+          }
+        };
+
+        // Restart the remote unit through the same streaming channel as sync.
+        // It drops whatever the remote is running, so ask first and reload the
+        // frame afterwards.
+        const restartService = async (server) => {
+          if (typeof window.confirm === 'function'
+            && !window.confirm(translate('confirmServiceRestart', { host: server.label }))) return;
+          const ok = await runAction(
+            SERVICE_ROUTE,
+            { host: server.id, action: 'restart' },
+            translate('restartingService'),
+            'serviceFailed',
+            translate('serviceDone', { host: server.label }),
+          );
+          if (!ok) return;
+          reload(server.id);
+          pollStatus().catch(() => {});
+          readProbe(server, true);
+        };
+
+        // Log tail is a one-shot read; it lands in the same panel as the
+        // streaming action output.
+        const showLogs = async (server) => {
+          setSyncState({ busy: true, error: false, text: translate('loadingLogs') });
+          try {
+            const response = await fetch(LOGS_ROUTE, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ host: server.id, lines: 200 }),
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || payload.ok !== true) throw new Error(payload.error || translate('httpStatus', { status: response.status }));
+            const lines = String(payload.text || '').replace(/\s+$/, '').split('\n');
+            setLog({ open: true, lines: lines.slice(-400).map((text) => ({ stream: 'stdout', text })) });
+            setSyncState({ busy: false, error: false, text: '' });
+          } catch (err) {
+            setSyncState({ busy: false, error: true, text: translate('logsFailed', { detail: flat(err && err.message ? err.message : String(err)) }) });
+          }
         };
 
         const retry = async (server) => {
@@ -755,6 +995,16 @@ window.__ModuleLoader__.load({
           };
         }, [activeId]);
 
+        // Probe once when a host is opened, unless the Host already returned a
+        // fresh cached summary in the status payload.
+        React.useEffect(() => {
+          if (!active) return;
+          const cached = s.status[active.id] && s.status[active.id].probe;
+          if (cached && cached.at && Date.now() - cached.at < 60000) setProbe({ id: active.id, ...cached });
+          else readProbe(active, false).catch(() => {});
+          setMenuOpen(false);
+        }, [activeId]);
+
         const entryFor = (server) => s.status[server.id] || null;
         const frameSrc = (server) => {
           const entry = entryFor(server);
@@ -788,6 +1038,26 @@ window.__ModuleLoader__.load({
         const disabled = syncState.busy || !active;
         // Only a host this plugin owns has an ssh target to update.
         const managed = !!(active && (active.managed === true || (entryFor(active) && entryFor(active).managed === true)));
+        const activeEntry = active ? entryFor(active) : null;
+        const probeEntry = active
+          ? (probe.id === active.id ? probe : (activeEntry && activeEntry.probe) || null)
+          : null;
+        const probeInfo = probeEntry && probeEntry.info;
+        const probeText = probeInfo
+          ? [
+            probeInfo.dsh && probeInfo.dsh.version ? 'dsh ' + probeInfo.dsh.version : '',
+            probeInfo.service && probeInfo.service.state ? probeInfo.service.state : '',
+          ].filter(Boolean).join(' · ')
+          : (probeEntry && probeEntry.error ? translate('probeUnavailable') : '');
+        const menuItem = (label, run, off) => h('button', {
+          key: label, type: 'button', role: 'menuitem', disabled: off === true,
+          onClick: () => { setMenuOpen(false); if (off !== true) run(); },
+          style: {
+            textAlign: 'left', cursor: off === true ? 'default' : 'pointer', border: 0,
+            borderRadius: '6px', padding: '6px 10px', background: 'transparent',
+            color: 'inherit', font: 'inherit', opacity: off === true ? 0.45 : 0.9,
+          },
+        }, label);
 
         return h('div', {
           style: {
@@ -822,32 +1092,33 @@ window.__ModuleLoader__.load({
                 color: 'inherit', font: 'inherit', opacity: 0.8,
               },
             }, translate('back')),
-            ...servers.map((server, index) =>
-              h('button', {
-                key: server.id,
-                type: 'button',
-                onClick: () => openServer(server.id),
-                title: translate('switchTitle', { n: index + 1 }),
-                style: {
-                  cursor: 'pointer', font: 'inherit', border: 0, borderRadius: '8px',
-                  padding: '4px 10px',
-                  background: active && active.id === server.id ? 'rgba(128,128,128,0.18)' : 'transparent',
-                  color: 'inherit',
-                  opacity: active && active.id === server.id ? 1 : 0.65,
-                },
-              },
+            servers.length === 0
+              ? h('span', { style: { fontSize: '12px', opacity: 0.65 } }, translate('noServers'))
+              : h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', minWidth: 0 } },
                 h('span', {
                   style: {
                     display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%',
-                    marginRight: '6px', background: dotColor(stateOf(server)), verticalAlign: 'middle',
+                    background: dotColor(stateOf(active || servers[0])), flex: '0 0 auto',
                   },
                 }),
-                server.label,
-                stateLabel(server)
-                  ? h('span', { style: { marginLeft: '6px', fontSize: '11px', opacity: 0.6 } }, stateLabel(server))
-                  : null
-              )
-            ),
+                h('select', {
+                  value: active ? active.id : '',
+                  onChange: (event) => { if (event.target.value) openServer(event.target.value); },
+                  title: translate('switchHost'),
+                  'aria-label': translate('switchHost'),
+                  style: {
+                    cursor: 'pointer', font: 'inherit', fontSize: '13px',
+                    border: '1px solid rgba(128,128,128,0.35)', borderRadius: '8px',
+                    padding: '4px 8px', background: 'transparent', color: 'inherit',
+                    maxWidth: '240px',
+                  },
+                },
+                  ...servers.map((server) => h('option', {
+                    key: server.id,
+                    value: server.id,
+                  }, server.label + (stateLabel(server) ? ' · ' + stateLabel(server) : '')))
+                )
+              ),
             h('button', {
               type: 'button',
               disabled,
@@ -855,20 +1126,6 @@ window.__ModuleLoader__.load({
               title: translate('sync'),
               style: barStyle(disabled),
             }, syncState.busy ? translate('syncBusy') : translate('sync')),
-            h('button', {
-              type: 'button',
-              disabled,
-              onClick: () => active && sync(active, { restart: false }),
-              title: translate('syncCopy'),
-              style: barStyle(disabled),
-            }, translate('syncCopy')),
-            h('button', {
-              type: 'button',
-              disabled,
-              onClick: () => active && sync(active, { restart: false, dryRun: true }),
-              title: translate('syncPreview'),
-              style: barStyle(disabled),
-            }, translate('syncPreview')),
             managed
               ? h('button', {
                 type: 'button',
@@ -878,10 +1135,52 @@ window.__ModuleLoader__.load({
                 style: barStyle(syncState.busy),
               }, translate('update'))
               : null,
+            h('span', {
+              ref: menuRef,
+              style: { position: 'relative', display: 'inline-flex' },
+            },
+              h('button', {
+                type: 'button',
+                disabled: !active,
+                onClick: () => setMenuOpen((open) => !open),
+                title: translate('more'),
+                'aria-label': translate('more'),
+                'aria-haspopup': 'menu',
+                'aria-expanded': menuOpen ? 'true' : 'false',
+                style: barStyle(!active),
+              }, '⋯'),
+              menuOpen
+                ? h('div', {
+                  role: 'menu',
+                  style: {
+                    position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 30,
+                    minWidth: '210px', display: 'flex', flexDirection: 'column', gap: '2px',
+                    padding: '4px', color: 'inherit',
+                    background: 'var(--dsw-alias-bg-layer-1, #fff)',
+                    border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.35))',
+                    borderRadius: '8px', boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+                  },
+                },
+                  menuItem(translate('syncCopy'), () => sync(active, { restart: false }), disabled),
+                  menuItem(translate('syncPreview'), () => sync(active, { restart: false, dryRun: true }), disabled),
+                  menuItem(translate('probe'), () => readProbe(active, true), !managed || syncState.busy),
+                  menuItem(translate('restartService'), () => restartService(active), !managed || syncState.busy),
+                  menuItem(translate('showLogs'), () => showLogs(active), !managed || syncState.busy),
+                  menuItem(translate('reload'), () => reload(active.id), !active),
+                  menuItem(translate('external'), () => window.open(frameSrc(active), '_blank', 'noopener'), !active)
+                )
+                : null
+            ),
             syncState.text
               ? h('span', {
                 style: { fontSize: '12px', opacity: 0.7, color: syncState.error ? 'var(--dsw-alias-state-error-primary, #d9534f)' : 'inherit' },
               }, syncState.text)
+              : null,
+            probeText
+              ? h('span', {
+                title: probeEntry && probeEntry.error ? probeEntry.error : undefined,
+                style: { fontSize: '11px', opacity: 0.65, whiteSpace: 'nowrap' },
+              }, probeText)
               : null,
             h('span', { style: { flex: 1 } }),
             log.open || log.lines.length
@@ -891,18 +1190,7 @@ window.__ModuleLoader__.load({
                 title: log.open ? translate('logHide') : translate('logShow'),
                 style: barStyle(false),
               }, log.open ? translate('logHide') : translate('log'))
-              : null,
-            h('button', {
-              type: 'button',
-              onClick: () => active && reload(active.id),
-              style: { cursor: 'pointer', background: 'transparent', border: 0, color: 'inherit', font: 'inherit', opacity: 0.7 },
-            }, translate('reload')),
-            h('button', {
-              type: 'button',
-              disabled: !active,
-              onClick: () => { if (active) window.open(frameSrc(active), '_blank', 'noopener'); },
-              style: barStyle(!active),
-            }, translate('external'))
+              : null
           ),
           log.open
             ? h('div', {
@@ -1034,6 +1322,9 @@ window.__ModuleLoader__.load({
             state: typeof row.state === 'string' ? row.state : 'external',
             error: typeof row.error === 'string' ? row.error : '',
             proxyUrl: typeof row.proxyUrl === 'string' ? row.proxyUrl : '',
+            probe: row.probe && typeof row.probe === 'object'
+              ? { at: Number(row.probe.at) || 0, info: row.probe.info || null, error: typeof row.probe.error === 'string' ? row.probe.error : '' }
+              : null,
             updatedAt: Number(row.updatedAt) || 0,
           };
         }

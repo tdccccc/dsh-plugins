@@ -5,15 +5,20 @@
 #   bin/update.sh a100-146 --version 0.2.2-rc.3  # the version this app runs
 #   bin/update.sh a100-146 --tag next --dry-run
 #   bin/update.sh a100-146 --no-restart
+#   bin/update.sh a100-146 --unit dsh-web-2 --port 27995
 #
-# The remote side is discovered rather than assumed: the running dsh-web unit
-# names the Node that serves it, that Node's prefix owns the global
-# @deepseek-ai/dsh package, and the package's own npm replaces it in place.
+# --unit NAME (default dsh-web), --kind KIND (systemd-user | launchd-user |
+# command | external) and --port N follow the same service descriptor the
+# plugin config uses.
+#
+# The remote side is discovered rather than assumed: the running unit names
+# the Node that serves it, that Node's prefix owns the global @deepseek-ai/dsh
+# package, and the package's own npm replaces it in place.
 # Progress goes to stdout and failures to stderr so the plugin can show both.
 set -eu
 
 if [ $# -lt 1 ]; then
-  printf 'usage: update.sh <ssh-host> [--version V | --tag T] [--port N] [--dry-run] [--no-restart]\n' >&2
+  printf 'usage: update.sh <ssh-host> [--version V | --tag T] [--port N] [--unit NAME] [--kind KIND] [--dry-run] [--no-restart]\n' >&2
   exit 2
 fi
 HOST=$1
@@ -22,6 +27,8 @@ shift
 VERSION=""
 TAG=""
 PORT=27993
+UNIT=dsh-web
+KIND=systemd-user
 DRY=0
 RESTART=1
 while [ $# -gt 0 ]; do
@@ -29,6 +36,8 @@ while [ $# -gt 0 ]; do
     --version) shift; [ $# -gt 0 ] || { printf '%s\n' '--version needs a value' >&2; exit 2; }; VERSION=$1 ;;
     --tag) shift; [ $# -gt 0 ] || { printf '%s\n' '--tag needs a value' >&2; exit 2; }; TAG=$1 ;;
     --port) shift; [ $# -gt 0 ] || { printf '%s\n' '--port needs a value' >&2; exit 2; }; PORT=$1 ;;
+    --unit) shift; [ $# -gt 0 ] || { printf '%s\n' '--unit needs a value' >&2; exit 2; }; UNIT=$1 ;;
+    --kind) shift; [ $# -gt 0 ] || { printf '%s\n' '--kind needs a value' >&2; exit 2; }; KIND=$1 ;;
     --dry-run) DRY=1 ;;
     --no-restart) RESTART=0 ;;
     *) printf 'unknown option: %s\n' "$1" >&2; exit 2 ;;
@@ -41,18 +50,22 @@ done
 case "$VERSION" in *[!A-Za-z0-9._+-]*) printf 'bad version: %s\n' "$VERSION" >&2; exit 2 ;; esac
 case "$TAG" in *[!A-Za-z0-9._+-]*) printf 'bad tag: %s\n' "$TAG" >&2; exit 2 ;; esac
 case "$PORT" in ''|*[!0-9]*) printf 'bad port: %s\n' "$PORT" >&2; exit 2 ;; esac
+case "$UNIT" in *[!A-Za-z0-9@._:-]*) printf 'bad unit: %s\n' "$UNIT" >&2; exit 2 ;; esac
+case "$KIND" in systemd-user|launchd-user|command|external) ;; *) printf 'bad kind: %s\n' "$KIND" >&2; exit 2 ;; esac
 
 printf '== %s ==\n' "$HOST"
 
 # One remote shell carries the whole probe and update so every step sees the
 # same toolchain; sh -s reads the payload below from stdin.
-ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" "sh -s -- '$VERSION' '$TAG' '$PORT' '$RESTART' '$DRY'" <<'REMOTE'
+ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" "sh -s -- '$VERSION' '$TAG' '$PORT' '$RESTART' '$DRY' '$UNIT' '$KIND'" <<'REMOTE'
 set -u
 VERSION=$1
 TAG=$2
 PORT=$3
 RESTART=$4
 DRY=$5
+UNIT=$6
+KIND=$7
 
 say() { printf '%s\n' "$*"; }
 die() { printf '%s\n' "$*" >&2; exit 1; }
@@ -62,18 +75,29 @@ die() { printf '%s\n' "$*" >&2; exit 1; }
 # loaded the installed package, so that prefix owns the copy to replace even
 # when several Node versions live side by side.
 NODE_BIN=""
-if command -v systemctl >/dev/null 2>&1; then
-  PID=$(systemctl --user show -p MainPID --value dsh-web 2>/dev/null || true)
-  case "$PID" in
-    ''|0|*[!0-9]*) ;;
-    *)
-      EXE=$(readlink -f "/proc/$PID/exe" 2>/dev/null || true)
-      case "$EXE" in
-        */bin/node) NODE_BIN=$(dirname "$EXE") ;;
-      esac
-      ;;
-  esac
-fi
+case "$KIND" in
+  systemd-user)
+    if command -v systemctl >/dev/null 2>&1; then
+      PID=$(systemctl --user show -p MainPID --value "$UNIT" 2>/dev/null || true)
+    fi
+    ;;
+  launchd-user)
+    if command -v launchctl >/dev/null 2>&1; then
+      PID=$(launchctl print "gui/$(id -u)/$UNIT" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}' || true)
+    fi
+    ;;
+  *) PID=""
+     ;;
+esac
+case "$PID" in
+  ''|0|*[!0-9]*) ;;
+  *)
+    EXE=$(readlink -f "/proc/$PID/exe" 2>/dev/null || true)
+    case "$EXE" in
+      */bin/node) NODE_BIN=$(dirname "$EXE") ;;
+    esac
+    ;;
+esac
 
 # With the unit down, the launcher pins the same toolchain. Follow the shell's
 # own trace of its exec instead of parsing the pin, so any form of it works.
@@ -169,21 +193,33 @@ say "   installed: $INSTALLED"
 
 # -- restart ---------------------------------------------------------------
 if [ "$RESTART" != 1 ]; then
-  say "   files updated; restart dsh-web to apply"
+  say "   files updated; restart $UNIT to apply"
   exit 0
 fi
-command -v systemctl >/dev/null 2>&1 || die "systemctl is unavailable; restart dsh-web manually"
-say "   restarting dsh-web (interrupts sessions running on the remote)"
-systemctl --user restart dsh-web || die "could not restart dsh-web"
-
-n=0
-while [ "$n" -lt 30 ]; do
-  [ "$(systemctl --user is-active dsh-web 2>/dev/null)" = active ] && break
-  n=$((n + 1))
-  sleep 1
-done
-STATE=$(systemctl --user is-active dsh-web 2>/dev/null || true)
-[ "$STATE" = active ] || die "dsh-web is not active after the restart"
+say "   restarting $UNIT (interrupts sessions running on the remote)"
+case "$KIND" in
+  systemd-user)
+    command -v systemctl >/dev/null 2>&1 || die "systemctl is unavailable; restart $UNIT manually"
+    systemctl --user restart "$UNIT" || die "could not restart $UNIT"
+    n=0
+    while [ "$n" -lt 30 ]; do
+      [ "$(systemctl --user is-active "$UNIT" 2>/dev/null)" = active ] && break
+      n=$((n + 1))
+      sleep 1
+    done
+    STATE=$(systemctl --user is-active "$UNIT" 2>/dev/null || true)
+    [ "$STATE" = active ] || die "$UNIT is not active after the restart"
+    ;;
+  launchd-user)
+    command -v launchctl >/dev/null 2>&1 || die "launchctl is unavailable; restart $UNIT manually"
+    launchctl kickstart -k "gui/$(id -u)/$UNIT" || die "could not restart $UNIT"
+    STATE=active
+    sleep 2
+    ;;
+  *)
+    die "$KIND services cannot be restarted by this script; use bin/remote.sh service"
+    ;;
+esac
 # A restart drops the launch token the local proxy cached. Wait until the new
 # server answers, then let the caller reload the frame.
 if command -v curl >/dev/null 2>&1; then
@@ -197,8 +233,8 @@ if command -v curl >/dev/null 2>&1; then
   done
   [ -n "$CODE" ] || CODE=000
   say "   http:    $CODE on 127.0.0.1:$PORT"
-  [ "$CODE" = 000 ] && die "dsh-web is active but 127.0.0.1:$PORT does not answer"
+  [ "$CODE" = 000 ] && die "$UNIT is active but 127.0.0.1:$PORT does not answer"
 fi
 sleep 2
-say "   dsh-web: $STATE"
+say "   $UNIT: $STATE"
 REMOTE

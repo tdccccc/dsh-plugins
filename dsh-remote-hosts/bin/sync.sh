@@ -5,27 +5,50 @@
 #   bin/sync.sh a100-146 --restart  # copy, then restart the remote dsh-web unit
 #   bin/sync.sh a100-146 --dry-run  # show the plan
 #
+# A managed row can point at another service shape:
+#   --profile NAME   remote dsh profile directory (default web)
+#   --unit NAME      systemd unit or launchd label (default dsh-web)
+#   --kind KIND      systemd-user | launchd-user | command | external
+#   --port N         remote dsh web port used by the restart health check
+#
 # What travels: ~/.dsh/AGENTS.md, the profile patch layer (desktop -> web),
 # and the provider API keys that layer references.
 #
 # Progress goes to stdout; failures go to stderr so the plugin can show them.
 set -eu
 
-HOST=${1:?"usage: sync.sh <ssh-host> [--restart] [--dry-run]"}
+say() { printf '%s\n' "$*"; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+
+if [ $# -lt 1 ]; then
+  printf 'usage: sync.sh <ssh-host> [--restart] [--dry-run] [--profile NAME] [--unit NAME] [--kind KIND] [--port N]\n' >&2
+  exit 2
+fi
+HOST=$1
 shift
 RESTART=0
 DRY=0
+PROFILE=web
+UNIT=dsh-web
+KIND=systemd-user
+PORT=27993
 while [ $# -gt 0 ]; do
   case "$1" in
     --restart) RESTART=1 ;;
     --dry-run) DRY=1 ;;
+    --profile) shift; PROFILE=${1:?"--profile needs a value"} ;;
+    --unit) shift; UNIT=${1:?"--unit needs a value"} ;;
+    --kind) shift; KIND=${1:?"--kind needs a value"} ;;
+    --port) shift; PORT=${1:?"--port needs a value"} ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
 done
-
-say() { printf '%s\n' "$*"; }
-die() { printf '%s\n' "$*" >&2; exit 1; }
+# Values are interpolated into rsync/ssh arguments below; keep them plain.
+case "$PROFILE" in *[!A-Za-z0-9._-]*) die "bad profile: $PROFILE" ;; esac
+case "$UNIT" in *[!A-Za-z0-9@._:-]*) die "bad unit: $UNIT" ;; esac
+case "$KIND" in systemd-user|launchd-user|command|external) ;; *) die "bad kind: $KIND" ;; esac
+case "$PORT" in ''|*[!0-9]*) die "bad port: $PORT" ;; esac
 
 LOCAL_PATCH="$HOME/.dsh/profiles/desktop/cordis.patch.yml"
 [ -f "$LOCAL_PATCH" ] || die "missing $LOCAL_PATCH"
@@ -101,16 +124,22 @@ if [ "$DRY" = 1 ]; then
 fi
 
 rsync -az "$HOME/.dsh/AGENTS.md" "$HOST:.dsh/AGENTS.md"
-rsync -az "$TMP/web-patch.yml" "$HOST:.dsh/profiles/web/cordis.patch.yml"
+rsync -az "$TMP/web-patch.yml" "$HOST:.dsh/profiles/$PROFILE/cordis.patch.yml"
 rsync -az "$TMP/remote.env" "$HOST:.dsh/remote.env"
 ssh "$HOST" 'chmod 600 ~/.dsh/remote.env'
 
 if [ "$RESTART" = 1 ]; then
-  say "   restarting dsh-web"
-  # Report the unit state ourselves: a plain "is-active" failure prints to
-  # stdout and would otherwise reach the UI without any context.
-  ssh "$HOST" 'systemctl --user restart dsh-web; sleep 6; status=$(systemctl --user is-active dsh-web); printf "dsh-web: %s\n" "$status"; [ "$status" = active ] || exit 3'
-  say "   dsh-web restarted"
+  say "   restarting $UNIT"
+  # The remote helper owns the service shape and the health check; a missing
+  # helper falls back to the old systemd-only restart.
+  HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+  if [ -x "$HERE/remote.sh" ]; then
+    "$HERE/remote.sh" "$HOST" service restart --port "$PORT" --unit "$UNIT" --kind "$KIND" || die "could not restart $UNIT"
+  else
+    [ "$KIND" = systemd-user ] || die "bin/remote.sh is missing; cannot restart a $KIND service"
+    ssh "$HOST" "systemctl --user restart $UNIT; sleep 6; status=\$(systemctl --user is-active $UNIT); printf '%s: %s\\n' '$UNIT' \"\$status\"; [ \"\$status\" = active ] || exit 3" || die "could not restart $UNIT"
+  fi
+  say "   $UNIT restarted"
 else
   say "   files copied; pass --restart (or restart dsh-web) to apply"
 fi

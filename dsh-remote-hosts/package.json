@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote-hosts",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Open remote dsh web instances in an overlay over the main area, with a managed ssh tunnel, live connection state, settings sync, and remote dsh updates.",
@@ -8,6 +8,9 @@
     "type": "git",
     "url": "https://github.com/tdccccc/dsh-plugins.git",
     "directory": "dsh-remote-hosts"
+  },
+  "scripts": {
+    "test": "node --test test/"
   },
   "main": "index.js",
   "exports": {
