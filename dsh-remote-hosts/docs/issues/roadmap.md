@@ -42,10 +42,9 @@ B1/B2/B4/B5/B6、F1–F5、O1–O10 已处理；B3 的“接口来源校验”�
 
 ### P0-2 重启/更新/停止前没有远端活跃会话保护
 
-- 现状：确认框只提示“会中断远端会话”，无法判断远端是否真的在跑任务。
-- 依据：`bin/remote.sh probe` 已经能读取 service/端口/日志，但没有会话活动信息；`bin/update.sh`、`bin/sync.sh --restart`、`service restart|stop` 都直接执行。
+- 现状：确认框只提示“会中断远端会话”，无法判断远端是否真的在跑任务。`bin/remote.sh probe` 已经返回 `sessions`（最近 10 分钟内有写入的会话数/最新 mtime/id 摘要），但 Host 路由和 UI 都没有使用它；`bin/update.sh`、`bin/sync.sh --restart`、`service restart|stop` 仍直接执行。
 - 做法：
-  - probe 增加会话活跃字段：`~/.dsh/sessions` 最近 N 分钟内有写入的文件数/最新 mtime，可带 1–2 个会话 id 摘要；默认窗口 10 分钟，可配。
+  - 复用 probe 已有的 `sessions` 字段，把检测窗口做成参数（默认 10 分钟）。
   - Host 在执行会重启/停止服务的动作前检查该字段；活跃时返回可识别的错误码与摘要，UI 用二次确认提供“仍然执行”。
   - 空闲时不增加额外操作，保持一步完成。
 - 验收：远端空闲时一键更新/重启；有活跃会话时默认拦截并显示原因，明确选择后才继续。
