@@ -90,6 +90,8 @@ window.__ModuleLoader__.load({
       updateFailed: 'Update failed: {detail}',
       updated: 'dsh on {host} is now {version}',
       updatedLatest: 'dsh on {host} is up to date',
+      updateAvailable: 'Update available',
+      updateAvailableTitle: 'Remote dsh {current} is older than {target}',
       more: 'More actions',
       probe: 'Check remote',
       restartService: 'Restart remote service',
@@ -238,6 +240,8 @@ window.__ModuleLoader__.load({
       updateFailed: '更新失败：{detail}',
       updated: '{host} 上的 dsh 已是 {version}',
       updatedLatest: '{host} 上的 dsh 已是最新版本',
+      updateAvailable: '可更新',
+      updateAvailableTitle: '远端 dsh {current} 落后于 {target}',
       more: '更多操作',
       probe: '检测远端',
       restartService: '重启远端服务',
@@ -655,8 +659,10 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false);
       const [notice, setNotice] = React.useState('');
       const [failed, setFailed] = React.useState(false);
-      // id -> { busy, at, info, error } from the last 测试连接 on that card.
+      // id -> { busy, at, info, update, error } from the last 测试连接 on that card.
       const [tests, setTests] = React.useState({});
+      // id -> update state from the Host's cached probe, fetched once per save.
+      const [updates, setUpdates] = React.useState({});
       const alive = React.useRef(true);
       const nextKey = React.useRef(0);
 
@@ -676,6 +682,24 @@ window.__ModuleLoader__.load({
         setDraft(snapshot.servers.map(makeRow));
         setRevision(snapshot.revision);
       }, [draft, snapshot.loaded, snapshot.servers, snapshot.revision]);
+
+      // Seed update badges from the probes the Host already has. This reads the
+      // status payload only; it opens no SSH and starts no tunnel.
+      React.useEffect(() => {
+        let live = true;
+        fetch(STATUS_ROUTE, { cache: 'no-store' })
+          .then((response) => response.json())
+          .then((payload) => {
+            if (!live || !payload || !Array.isArray(payload.servers)) return;
+            const next = {};
+            for (const row of payload.servers) {
+              if (row && row.id && row.update && row.update.available) next[row.id] = row.update;
+            }
+            setUpdates(next);
+          })
+          .catch(() => {});
+        return () => { live = false; };
+      }, [snapshot.revision]);
 
       if (view === 'summary') return t('summary');
 
@@ -784,13 +808,19 @@ window.__ModuleLoader__.load({
           if (!alive.current) return;
           setTests((current) => ({
             ...current,
-            [id]: { busy: false, at: Number(payload.at) || Date.now(), info: payload.info || null, error: '' },
+            [id]: {
+              busy: false,
+              at: Number(payload.at) || Date.now(),
+              info: payload.info || null,
+              update: payload.update && typeof payload.update === 'object' ? payload.update : null,
+              error: '',
+            },
           }));
         } catch (error) {
           if (!alive.current) return;
           setTests((current) => ({
             ...current,
-            [id]: { busy: false, info: null, error: flatText(error && error.message ? error.message : error) },
+            [id]: { busy: false, info: null, update: null, error: flatText(error && error.message ? error.message : error) },
           }));
         }
       };
@@ -820,6 +850,9 @@ window.__ModuleLoader__.load({
         const result = tests[id] || null;
         const canTest = Boolean(id && saved && row.sshHost.trim());
         const summary = testSummary(result);
+        // A fresh test wins over the cached status result, including when it
+        // says the host is already current.
+        const update = result ? (result.update || null) : (updates[id] || null);
         return h('div', { className: 'rh-testrow', key: 'test' },
           h('button', {
             type: 'button',
@@ -832,6 +865,12 @@ window.__ModuleLoader__.load({
           }, result && result.busy ? t('testing') : t('test')),
           summary
             ? h('span', { className: 'rh-test-state' + testTone(result), title: summary }, summary)
+            : null,
+          update && update.available
+            ? h('span', {
+              className: 'rh-update-badge',
+              title: t('updateAvailableTitle', { current: update.current || '', target: update.target || '' }),
+            }, '↑ ' + t('updateAvailable'))
             : null);
       };
       const discard = async () => {
@@ -1000,6 +1039,7 @@ window.__ModuleLoader__.load({
 .dsh-remote-hosts-settings .rh-test-state.rh-ok{color:var(--dsw-alias-state-success-primary,#2f9e44)}
 .dsh-remote-hosts-settings .rh-test-state.rh-warn{color:var(--dsw-alias-state-warning-primary,#f08c00)}
 .dsh-remote-hosts-settings .rh-test-state.rh-bad{color:var(--dsw-alias-state-error-primary,#d9534f)}
+.dsh-remote-hosts-settings .rh-update-badge{flex:0 0 auto;padding:1px 7px;border:1px solid currentColor;border-radius:999px;font-size:11px;white-space:nowrap;color:var(--dsw-alias-state-warning-primary,#f08c00)}
 .dsh-remote-hosts-settings .rh-adv{margin-top:12px;padding-top:8px;border-top:1px dashed var(--dsw-alias-border-l1)}
 .dsh-remote-hosts-settings .rh-adv>summary{list-style:none;cursor:pointer;font-size:12px;color:var(--dsw-alias-label-secondary);user-select:none}
 .dsh-remote-hosts-settings .rh-adv>summary::-webkit-details-marker{display:none}
@@ -1488,6 +1528,11 @@ window.__ModuleLoader__.load({
           if (state === 'external') return '';
           return translate('statusUnavailable');
         };
+        // The Host adds this from the last probe; no probe means no badge.
+        const updateFor = (server) => {
+          const entry = entryFor(server);
+          return entry && entry.update && entry.update.available ? entry.update : null;
+        };
         const barStyle = (off) => ({
           cursor: off ? 'default' : 'pointer', font: 'inherit', border: 0,
           borderRadius: '8px', padding: '4px 10px', background: 'transparent',
@@ -1506,6 +1551,7 @@ window.__ModuleLoader__.load({
         // Only a host this plugin owns has an ssh target to update.
         const managed = !!(active && (active.managed === true || (entryFor(active) && entryFor(active).managed === true)));
         const activeEntry = active ? entryFor(active) : null;
+        const activeUpdate = activeEntry && activeEntry.update && activeEntry.update.available ? activeEntry.update : null;
         const probeEntry = active
           ? (probe.id === active.id ? probe : (activeEntry && activeEntry.probe) || null)
           : null;
@@ -1585,9 +1631,21 @@ window.__ModuleLoader__.load({
                   ...servers.map((server) => h('option', {
                     key: server.id,
                     value: server.id,
-                  }, server.label + (stateLabel(server) ? ' · ' + stateLabel(server) : '')))
+                  }, server.label
+                    + (stateLabel(server) ? ' · ' + stateLabel(server) : '')
+                    + (updateFor(server) ? ' · ' + translate('updateAvailable') : '')))
                 )
               ),
+            activeUpdate
+              ? h('span', {
+                title: translate('updateAvailableTitle', { current: activeUpdate.current, target: activeUpdate.target }),
+                style: {
+                  fontSize: '11px', padding: '1px 7px', borderRadius: '999px',
+                  border: '1px solid currentColor', whiteSpace: 'nowrap',
+                  color: 'var(--dsw-alias-state-warning-primary, #f08c00)',
+                },
+              }, '↑ ' + translate('updateAvailable'))
+              : null,
             h('button', {
               type: 'button',
               disabled,
@@ -1804,6 +1862,13 @@ window.__ModuleLoader__.load({
             proxyUrl: typeof row.proxyUrl === 'string' ? row.proxyUrl : '',
             probe: row.probe && typeof row.probe === 'object'
               ? { at: Number(row.probe.at) || 0, info: row.probe.info || null, error: typeof row.probe.error === 'string' ? row.probe.error : '' }
+              : null,
+            update: row.update && typeof row.update === 'object'
+              ? {
+                current: typeof row.update.current === 'string' ? row.update.current : '',
+                target: typeof row.update.target === 'string' ? row.update.target : '',
+                available: row.update.available === true,
+              }
               : null,
             updatedAt: Number(row.updatedAt) || 0,
           };

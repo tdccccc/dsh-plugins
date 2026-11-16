@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import Schema from '@deepseek-ai/schemastery';
 import { configuredServers } from './lib/config.js';
 import { recentSessions, sessionWindowMinutes } from './lib/sessions.js';
+import { updateState } from './lib/update.js';
 import { Tunnel } from './lib/tunnel.js';
 import { Proxy } from './lib/proxy.js';
 
@@ -542,6 +543,21 @@ export function apply(ctx, config) {
     }
   };
 
+  // The app version names the default update target; read it once per mount.
+  let appVersionCache = null;
+  const appVersion = () => {
+    if (appVersionCache === null) appVersionCache = localDshVersion();
+    return appVersionCache;
+  };
+
+  // A badge is relative to the last probe: opening the host or the settings
+  // card's 测试连接 fills it; without a probe there is nothing to compare.
+  const updateFor = (server, link) => {
+    if (!link) return null;
+    const probe = link.probeSnapshot();
+    return updateState(probe && probe.info, server.updateChannel, appVersion());
+  };
+
   // The browser half renders the list, the state and the frame address from one
   // shape: proxyUrl is where the iframe goes, or empty while it cannot open.
   const describe = () => {
@@ -565,6 +581,7 @@ export function apply(ctx, config) {
             error: misconfigured,
             proxyUrl: '',
             probe: null,
+            update: null,
             updatedAt: 0,
           };
         }
@@ -578,10 +595,19 @@ export function apply(ctx, config) {
           error: '',
           proxyUrl: server.url,
           probe: null,
+          update: null,
           updatedAt: 0,
         };
       }
-      return { id: server.id, label: server.label, url: server.url, managed: true, sidebar: server.sidebar, ...link.status() };
+      return {
+        id: server.id,
+        label: server.label,
+        url: server.url,
+        managed: true,
+        sidebar: server.sidebar,
+        ...link.status(),
+        update: updateFor(server, link),
+      };
     });
   };
 
@@ -651,7 +677,7 @@ export function apply(ctx, config) {
     path: '/api/remote-hosts/status',
     methods: ['GET'],
     requestBody: 'buffered',
-    fetch: () => Promise.resolve(jsonResponse({ ok: true, localVersion: localDshVersion(), servers: describe() })),
+    fetch: () => Promise.resolve(jsonResponse({ ok: true, localVersion: appVersion(), servers: describe() })),
   }), 'remote-hosts: status route');
 
   // Opening a host is the only thing that starts its tunnel. active:false means
@@ -820,7 +846,10 @@ export function apply(ctx, config) {
       const link = links.get(host);
       if (!link) return jsonResponse({ ok: false, error: 'host is not managed by this plugin: ' + host }, 400);
       const result = await link.probeInfo(payload.force === true);
-      return jsonResponse({ ok: !result.error, at: result.at, info: result.info, error: result.error });
+      const update = result.info
+        ? updateState(result.info, link.server.updateChannel, appVersion())
+        : null;
+      return jsonResponse({ ok: !result.error, at: result.at, info: result.info, error: result.error, update });
     },
   }), 'remote-hosts: probe route');
 

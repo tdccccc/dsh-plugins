@@ -185,6 +185,12 @@ The overlay's actions menu and the scripts share one behavior:
   shown in the same panel as streaming actions.
 - A failure shows the host's one-line summary (timeout, exit code, or the last
   lines of output) instead of a bare HTTP code.
+- **Update badge** — once a probe knows the remote dsh version, an older remote
+  shows **可更新** in the overlay header/switcher and on its settings card. The
+  target is the row's exact `updateChannel`, otherwise the version this app
+  runs. Dist-tags (`latest`, `next`) are not resolved locally, so they never
+  produce a badge; a newer remote (nightly while the app is stable) stays quiet.
+  Nothing installs automatically.
 - **Active-session guard** — before an update, a restarting sync, or a service
   restart/stop, the Host forces a fresh probe of `~/.dsh/sessions` (the top-level
   `sessionWindow`, default 10 minutes). When a session wrote a file inside that
