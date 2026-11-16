@@ -7,10 +7,11 @@ import { configuredServers } from './lib/config.js';
 import { recentSessions, sessionWindowMinutes } from './lib/sessions.js';
 import { sshArgs, sshEnv } from './lib/ssh.js';
 import { updateState } from './lib/update.js';
-import { Tunnel } from './lib/tunnel.js';
+import { HostTunnel } from './lib/host-tunnel.js';
 import { Proxy, checkRequest } from './lib/proxy.js';
 
-// Host half: one ssh tunnel and auth-injecting proxy per configured remote host,
+// Host half: one shared ssh tunnel per sshHost (one -L per endpoint) and one
+// auth-injecting proxy per configured remote host,
 // a status route for the browser half, and the sync route that runs
 // bin/sync.sh. Every route lives under /api/, where the platform requires a live
 // browser session: the plain web server does no authentication or origin policy
@@ -350,8 +351,9 @@ function parseJsonLine(stdout) {
   return null;
 }
 
-// One configured host: its tunnel is the only upstream the proxy ever sees, so
-// the connection state is the worse of the two halves.
+// One configured host. Its proxy is the only upstream counterpart; the ssh
+// forward is owned by the HostTunnel shared with the other endpoints on the same
+// machine, so the connection state is the worse of the two halves.
 class ServerLink {
   constructor(server, options = {}) {
     this.server = server;
@@ -367,45 +369,44 @@ class ServerLink {
     // Last probe result (service/version/log health) is cached by time, not by
     // connection state: it only needs a fresh SSH read to refresh.
     this.probe = { at: 0, info: null, error: '', pending: null };
-    this.tunnel = new Tunnel({
-      id: server.id,
-      sshHost: server.sshHost,
-      remotePort: server.remotePort,
-      localPort: server.localPort,
-      sshOptions: server.sshOptions,
-      onState: () => this.wakeProxy(),
-    });
+    this.hostTunnel = options.hostTunnel || null;
+    this.onRelease = typeof options.onRelease === 'function' ? options.onRelease : () => {};
+    this.unsubscribeTunnel = this.hostTunnel
+      ? this.hostTunnel.subscribe(() => this.wakeProxy())
+      : () => {};
     this.proxy = new Proxy({
       sshHost: server.sshHost,
       remotePort: server.remotePort,
       remoteLog: server.remoteLog,
       tokenPattern: server.tokenPattern,
       sshOptions: server.sshOptions,
-      upstreamPort: () => (this.tunnel ? this.tunnel.localPort : 0),
+      upstreamPort: () => (this.hostTunnel ? this.hostTunnel.localPortFor(server.id) : 0),
     });
   }
 
   // A fresh tunnel is useless until the proxy logs in again; warming the cookie
   // here is what makes the iframe recover without another manual retry.
   wakeProxy() {
-    const tunnel = this.tunnel;
+    const tunnel = this.hostTunnel;
     const proxy = this.proxy;
-    if (tunnel && proxy && tunnel.state === 'online') proxy.retry().catch(() => {});
+    if (!this.running || !tunnel || !proxy || tunnel.state !== 'online') return;
+    proxy.retry().catch(() => {});
   }
 
   async start() {
-    const tunnel = this.tunnel;
+    const tunnel = this.hostTunnel;
     const proxy = this.proxy;
     if (!tunnel || !proxy) return;
     // A repeated activate joins the attempt in flight instead of stacking a
-    // second ssh process and proxy on the same host.
+    // second proxy on the same host; the shared tunnel itself never spawns twice.
     if (this.starting) return this.starting;
     this.startError = '';
     this.running = true;
     this.starting = (async () => {
       try {
+        tunnel.setNeeded(true);
         await tunnel.start();
-        if (this.proxy !== proxy) return;
+        if (this.proxy !== proxy || !this.running) return;
         await proxy.start();
       } catch (error) {
         this.startError = 'could not start the tunnel or proxy: ' + (error && error.message ? error.message : String(error));
@@ -425,13 +426,14 @@ class ServerLink {
 
   // Leaving the screen only marks the host idle: the connection stays warm for
   // the idle timeout, so switching back does not pay for a new ssh handshake.
+  // The shared host tunnel stays up while any sibling endpoint is running.
   deactivate() {
     this.activated = false;
     this.touchedAt = Date.now();
   }
 
-  // Stop the warm connection but keep the tunnel/proxy objects and the chosen
-  // local port, so a later activate reconnects on the same origin.
+  // Stop this endpoint's proxy listener but keep its objects and local port.
+  // The shared ssh process is released only when no sibling endpoint runs.
   async idle() {
     this.activated = false;
     if (this.starting) await this.starting;
@@ -441,10 +443,12 @@ class ServerLink {
     if (!this.running) return;
     this.running = false;
     const proxy = this.proxy;
-    const tunnel = this.tunnel;
     this.stopping = (async () => {
-      if (proxy) await proxy.stop();
-      if (tunnel) await tunnel.stop();
+      try {
+        if (proxy) await proxy.stop();
+      } finally {
+        this.onRelease();
+      }
     })().finally(() => { this.stopping = null; });
     return this.stopping;
   }
@@ -455,8 +459,10 @@ class ServerLink {
     // A dormant host has no proxy listener or ssh child to restart; starting
     // both from scratch is the reconnect.
     if (!this.running) return this.activate();
+    if (this.hostTunnel) this.hostTunnel.setNeeded(true);
     if (this.proxy) this.proxy.reset();
-    if (this.tunnel) await this.tunnel.restart();
+    if (this.hostTunnel && this.hostTunnel.state !== 'online') await this.hostTunnel.restart();
+    else if (this.proxy) this.proxy.retry().catch(() => {});
   }
 
   // Probe the remote service over SSH. Cached for PROBE_TTL_MS; force skips the
@@ -505,13 +511,19 @@ class ServerLink {
     this.running = false;
     if (this.starting) await this.starting;
     if (this.stopping) await this.stopping;
+    if (this.unsubscribeTunnel) {
+      this.unsubscribeTunnel();
+      this.unsubscribeTunnel = () => {};
+    }
     const proxy = this.proxy;
-    const tunnel = this.tunnel;
     this.proxy = null;
-    this.tunnel = null;
+    this.hostTunnel = null;
     this.clearProbe();
-    if (proxy) await proxy.stop();
-    if (tunnel) await tunnel.stop();
+    try {
+      if (proxy) await proxy.stop();
+    } finally {
+      this.onRelease();
+    }
   }
 
   status() {
@@ -526,7 +538,9 @@ class ServerLink {
         updatedAt: this.touchedAt,
       };
     }
-    const tunnel = this.tunnel ? this.tunnel.info : { state: 'offline', error: this.startError, updatedAt: 0 };
+    const tunnel = this.hostTunnel
+      ? this.hostTunnel.info
+      : { state: 'offline', error: this.startError, updatedAt: 0 };
     const proxy = this.proxy ? this.proxy.info : { state: 'offline', error: '', proxyUrl: '', updatedAt: 0 };
     let state = 'offline';
     let error = this.startError;
@@ -555,19 +569,19 @@ class ServerLink {
 
 export function apply(ctx, config) {
   const links = new Map();
+  // One shared ssh process per sshHost; each endpoint adds a forward to it.
+  const hostTunnels = new Map();
   let listed = [];
   // id -> reason a fixed local port is unusable; rebuilt by reconcile.
   let portErrors = new Map();
   let disposed = false;
   // The host the browser currently shows, and when it last asked for status.
   // Both keep only the on-screen host warm; every other link idles out by its
-  // own clock and stops its ssh process and proxy port.
+  // own clock and stops its proxy. One ssh per sshHost serves all endpoints.
   let currentId = null;
   let lastSeenAt = 0;
 
-  const sameTarget = (link, server) => link.server.sshHost === server.sshHost
-    && link.server.remotePort === server.remotePort
-    && link.server.localPort === server.localPort
+  const sameLink = (link, server, tunnel) => link.hostTunnel === tunnel
     && link.server.remoteLog === server.remoteLog
     && link.server.serviceKind === server.serviceKind
     && link.server.serviceUnit === server.serviceUnit
@@ -576,14 +590,27 @@ export function apply(ctx, config) {
     && link.server.tokenPattern === server.tokenPattern
     && link.server.sshOptions.join('\n') === server.sshOptions.join('\n');
 
+  // Stop a shared ssh process once no endpoint on that host is running. Links
+  // call this after their proxy stops; a host tunnel with a still-running
+  // sibling stays up.
+  const releaseHost = () => {
+    if (disposed) return;
+    for (const [host, tunnel] of hostTunnels) {
+      const busy = listed.some((server) => server.sshHost === host && links.get(server.id)?.running);
+      if (busy) continue;
+      tunnel.setNeeded(false);
+      if (tunnel.active) tunnel.stop().catch(() => {});
+    }
+  };
+
   // The server list lives in volatile settings, so it can change without this
   // plugin being remounted. Reconcile creates, replaces, and stops links to
   // match; it is synchronous, which also makes it cheap before every read.
   const reconcile = () => {
     if (disposed) return;
     listed = configuredServers(config);
-    // A fixed local port can only feed one tunnel; report the duplicate instead
-    // of letting the second ssh fail with a bind error.
+    // A fixed local port can only feed one forward; report the duplicate instead
+    // of letting ssh fail with a bind error.
     portErrors = new Map();
     const owners = new Map();
     for (const server of listed) {
@@ -595,23 +622,57 @@ export function apply(ctx, config) {
       }
       owners.set(server.localPort, server.id);
     }
-    const keep = new Set();
+    // Managed rows are grouped by machine: one ssh carries a -L for every
+    // endpoint of that machine, whether or not that endpoint is open yet.
+    const groups = new Map();
     for (const server of listed) {
       if (!server.sshHost || portErrors.has(server.id)) continue;
-      keep.add(server.id);
-      const existing = links.get(server.id);
-      if (existing && sameTarget(existing, server)) { existing.server = server; continue; }
-      // A replaced link keeps the state of the one it replaces: an open host
-      // reconnects on its new target, every other host stays dormant.
-      const warm = !!(existing && existing.activated) || currentId === server.id;
-      if (existing) {
-        links.delete(server.id);
-        existing.stop().catch(() => {});
+      if (!groups.has(server.sshHost)) groups.set(server.sshHost, []);
+      groups.get(server.sshHost).push(server);
+    }
+    for (const [host, tunnel] of hostTunnels) {
+      if (groups.has(host)) continue;
+      hostTunnels.delete(host);
+      tunnel.stop().catch(() => {});
+    }
+    const keep = new Set();
+    for (const [host, group] of groups) {
+      const first = group[0];
+      let tunnel = hostTunnels.get(host);
+      if (!tunnel) {
+        tunnel = new HostTunnel({ sshHost: host, sshOptions: first.sshOptions });
+        hostTunnels.set(host, tunnel);
       }
-      const link = new ServerLink(server, { sessionWindow: () => sessionWindowMinutes(config) });
-      link.touchedAt = Date.now();
-      links.set(server.id, link);
-      if (warm) link.activate().catch(() => {});
+      const changed = tunnel.setForwards(
+        group.map((server) => ({ id: server.id, remotePort: server.remotePort, localPort: server.localPort })),
+        first.sshOptions,
+      );
+      // A new/removed forward or changed options only take effect in a new ssh
+      // process; existing endpoints reconnect on the same local ports.
+      if (changed && tunnel.active) tunnel.restart().catch(() => {});
+      for (const server of group) {
+        keep.add(server.id);
+        const existing = links.get(server.id);
+        if (existing && sameLink(existing, server, tunnel)) {
+          existing.server = server;
+          continue;
+        }
+        // A replaced link keeps the state of the one it replaces: an open host
+        // reconnects, every other endpoint stays dormant.
+        const warm = !!(existing && existing.activated) || currentId === server.id;
+        if (existing) {
+          links.delete(server.id);
+          existing.stop().catch(() => {});
+        }
+        const link = new ServerLink(server, {
+          sessionWindow: () => sessionWindowMinutes(config),
+          hostTunnel: tunnel,
+          onRelease: releaseHost,
+        });
+        link.touchedAt = Date.now();
+        links.set(server.id, link);
+        if (warm) link.activate().catch(() => {});
+      }
     }
     for (const [id, link] of links) {
       if (keep.has(id)) continue;
@@ -767,7 +828,10 @@ export function apply(ctx, config) {
       actionsInFlight.clear();
       const current = [...links.values()];
       links.clear();
+      const tunnels = [...hostTunnels.values()];
+      hostTunnels.clear();
       await Promise.all(current.map((link) => link.stop()));
+      await Promise.all(tunnels.map((tunnel) => tunnel.stop()));
     };
   }, 'remote-hosts: ssh tunnels and proxies');
 

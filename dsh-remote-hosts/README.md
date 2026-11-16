@@ -1,9 +1,9 @@
 # dsh-remote-hosts
 
 Left-sidebar entries that open remote dsh web instances in a full-height overlay
-over the main area: a managed ssh tunnel and auth proxy per endpoint, live
-connection state, remote dsh updates, settings sync, service control and log
-tailing.
+over the main area: one shared ssh tunnel per machine, an auth proxy per
+endpoint, live connection state, remote dsh updates, settings sync, service
+control and log tailing.
 
 One row is one **endpoint**, not one machine. Several rows may share an
 `sshHost` with different ports/units, which is how a host running multiple dsh
@@ -28,35 +28,43 @@ instances is managed.
   conversation; Escape first closes the actions menu when it is open. ⌘/Ctrl+1…9
   switches hosts. The browser half remembers the host that was on screen and
   reopens it after a reload, until you go back.
-- Only the host you open gets an ssh tunnel and a proxy port. Other managed
-  hosts stay dormant with no process and no bound port; a host you leave closes
-  its **local** tunnel and proxy after `idleTimeout` (default 10 minutes, 0
-  disables) and reconnects the next time it is opened. The remote dsh-web
-  service and its sessions keep running.
+- Only endpoints you open get a proxy port. The first endpoint opened on an
+  `sshHost` starts one ssh process carrying a `-L` for every endpoint on that
+  machine; opening a sibling reuses it. Other managed hosts stay dormant with no
+  process and no bound port; once no endpoint on a machine is open, its ssh and
+  local forwards close after `idleTimeout` (default 10 minutes, 0 disables) and
+  reconnect the next time one is opened. The remote dsh-web service and its
+  sessions keep running.
 - An empty server list renders no rows; add one in the plugin settings.
 
 ## Connections
 
 A row with `sshHost` is fully managed: one
-`ssh -N -L 127.0.0.1:<local>:127.0.0.1:<remotePort>` tunnel per endpoint and an
-auth-injecting proxy on a free loopback port. The proxy reads the launch token
-from the remote log over SSH (using the row's `tokenPattern`, default
-`token=([A-Za-z0-9_-]+)`), logs in, and attaches the cookie itself.
-The row's `sshOptions` are added as audited `-o` flags to the tunnel and the
-token read, and are passed to the helper scripts through `DSH_SSH_OPTIONS`, so a
-jump host or a non-default port works without editing `~/.ssh/config`. It only
-listens on 127.0.0.1 and refuses non-loopback Hosts, foreign Origins and
+`ssh -N` process per `sshHost`, with a
+`-L 127.0.0.1:<local>:127.0.0.1:<remotePort>` forward for every row on that
+machine, plus an auth-injecting proxy on a free loopback port per endpoint. Three
+instances on one machine therefore use one ssh process and one TCP connection.
+The proxy reads the launch token from the remote log over SSH (using the row's
+`tokenPattern`, default `token=([A-Za-z0-9_-]+)`), logs in, and attaches the
+cookie itself. Rows sharing an `sshHost` share the tunnel, so use the same
+`sshOptions` on them; the first row's options define that tunnel.
+Each endpoint's `sshOptions` are added as audited `-o` flags to the token read
+and the helper scripts through `DSH_SSH_OPTIONS`, so a jump host or a
+non-default port works without editing `~/.ssh/config`.
+
+It only listens on 127.0.0.1 and refuses non-loopback Hosts, foreign Origins and
 cross-site requests; frame navigation is the one allowed cross-site shape
 because the desktop shell page runs on the `dsh-app://` scheme. Cross-site
 fetches, XHR, WebSockets and subresources are still refused.
 
-A tunnel is created when the browser opens the host, not when the plugin loads:
-the overlay posts to `/api/remote-hosts/activate` when a row is selected, and
-the Host starts that one link. Leaving the host releases it to the idle timer;
-the 3s status poll is the on-screen host's heartbeat, so closing the window
-also lets it go dormant. This only stops the local ssh process and proxy
-listener; nothing on the remote is restarted or stopped. Tunnels and proxies
-are stopped when the plugin unloads.
+A tunnel is created when the browser opens the first endpoint on a machine, not
+when the plugin loads: the overlay posts to `/api/remote-hosts/activate` when a
+row is selected, and the Host starts the shared `sshHost` tunnel with all of its
+forwards plus that endpoint's proxy. Leaving an endpoint releases its proxy to
+the idle timer; the 3s status poll is the on-screen host's heartbeat. The shared
+ssh stays up while a sibling endpoint is open and stops once none is. This only
+stops local ssh processes and proxy listeners; nothing on the remote is
+restarted or stopped. Tunnels and proxies are stopped when the plugin unloads.
 
 A row without `sshHost` is opened at its `url` as is (the old manual proxy).
 A fixed `localPort` must be unique across rows; duplicates are reported in the
@@ -121,7 +129,7 @@ dsh-remote-hosts → Configure**, or in the profile patch:
 | `localPort` | Fixed local tunnel port; 0 picks a free one. Must be unique when set. |
 | `remoteLog` | Remote log the login token is read from; defaults to `~/.dsh/web-<remotePort>.log`. |
 | `tokenPattern` | POSIX ERE that finds the launch token in that log; the first capture group is the token. Empty uses `token=([A-Za-z0-9_-]+)`. |
-| `sshOptions` | Audited `Key=Value` lines passed as `-o` to the tunnel, token read and helper scripts: `ProxyJump`, `IdentityFile`, `Port`, `User`, timeouts, keepalives. Values cannot contain spaces. |
+| `sshOptions` | Audited `Key=Value` lines passed as `-o` to the token read and helper scripts, and to the shared host tunnel (the first row on an `sshHost` defines it): `ProxyJump`, `IdentityFile`, `Port`, `User`, timeouts, keepalives. Values cannot contain spaces. |
 | `serviceKind` | `systemd-user` (default for ssh rows), `launchd-user`, `command`, or `external`. |
 | `serviceUnit` | systemd unit or launchd label; defaults to `dsh-web` for the managed kinds. |
 | `profile` | Remote profile directory under `~/.dsh/profiles`; default `web`. |

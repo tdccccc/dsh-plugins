@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -173,6 +173,62 @@ test('a second action on the same host is refused while one runs', async () => {
     process.env.HOME = oldHome;
     await host.dispose();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('endpoints sharing an ssh host use one ssh process', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-hosts-'));
+  const bin = join(dir, 'bin');
+  const home = join(dir, 'home');
+  const log = join(dir, 'ssh.log');
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(home, { recursive: true });
+  // The tunnel invocation holds the process; token reads exit immediately.
+  writeFileSync(join(bin, 'ssh'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "' + log + '"\ncase "$*" in\n  *" -N "*) exec sleep 6 ;;\nesac\nexit 0\n');
+  chmodSync(join(bin, 'ssh'), 0o755);
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.HOME;
+  process.env.PATH = bin + ':' + oldPath;
+  process.env.HOME = home;
+  const host = await setup({
+    servers: [
+      { id: 'a', label: 'A', sshHost: 'demo', remotePort: 27993 },
+      { id: 'b', label: 'B', sshHost: 'demo', remotePort: 27994 },
+      { id: 'c', label: 'C', sshHost: 'demo', remotePort: 27995 },
+    ],
+  });
+  try {
+    const activate = (id) => post(host.routes.get('/api/remote-hosts/activate'), { host: id });
+    const readLog = () => {
+      try { return readFileSync(log, 'utf8'); } catch { return ''; }
+    };
+    const waitFor = async (check) => {
+      const start = Date.now();
+      while (Date.now() - start < 3000) {
+        if (check()) return true;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return false;
+    };
+    await activate('a');
+    assert.ok(await waitFor(() => readLog().includes(' -N ')), 'the tunnel ssh did not start');
+    await activate('b');
+    await activate('c');
+    assert.ok(await waitFor(
+      () => readLog().split('\n').filter((line) => line.includes(' -N ')).length === 1,
+    ), 'a second tunnel ssh was started');
+    const lines = readLog().trim().split('\n');
+    const tunnels = lines.filter((line) => line.includes(' -N '));
+    assert.equal(tunnels.length, 1);
+    assert.equal((tunnels[0].match(/-L /g) || []).length, 3);
+  } finally {
+    try {
+      await host.dispose();
+    } finally {
+      process.env.PATH = oldPath;
+      process.env.HOME = oldHome;
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 
