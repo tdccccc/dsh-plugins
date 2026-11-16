@@ -11,6 +11,10 @@
 # Node, dsh, unit, and bundles are reused unless --force is given.
 set -eu
 
+# The plugin passes audited "-o Key=Value" options through this variable; only
+# validated tokens, so the unquoted expansion is safe.
+SSH_OPTS=${DSH_SSH_OPTIONS:-}
+
 say() { printf '%s\n' "$*"; }
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
@@ -276,7 +280,7 @@ quote() { printf "'%s'" "$1"; }
 ARGV="$(quote "$PORT") $(quote "$UNIT") $(quote "$PROFILE") $(quote "$NODE_VERSION") $(quote "$DSH_VERSION") $(quote "$BUNDLES") $(quote "$FORCE") $(quote "$DRY")"
 
 say "== $HOST =="
-ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" "sh -s -- $ARGV" < "$REMOTE" || die "provisioning failed on $HOST"
+ssh $SSH_OPTS -o BatchMode=yes -o ConnectTimeout=10 "$HOST" "sh -s -- $ARGV" < "$REMOTE" || die "provisioning failed on $HOST"
 
 if [ "$SYNC" = 1 ] && [ "$DRY" = 0 ]; then
   HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

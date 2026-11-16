@@ -36,6 +36,14 @@ window.__ModuleLoader__.load({
     const UNIT_PATTERN = /^[A-Za-z0-9@._:-]{1,128}$/;
     const PROFILE_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
     const CHANNEL_PATTERN = /^[A-Za-z0-9._+-]{1,64}$/;
+    // Keep this list in sync with lib/ssh.js; the Host drops anything else.
+    const SSH_OPTION_KEYS = new Set([
+      'ProxyJump', 'IdentityFile', 'IdentitiesOnly', 'User', 'Port',
+      'ConnectTimeout', 'ServerAliveInterval', 'ServerAliveCountMax',
+      'StrictHostKeyChecking', 'UserKnownHostsFile', 'PreferredAuthentications',
+      'PubkeyAuthentication', 'HostKeyAlgorithms', 'AddressFamily',
+    ]);
+    const SSH_OPTION_VALUE = /^[A-Za-z0-9@._,:/~+=-]{1,200}$/;
 
     const EN = {
       back: '← Local conversation',
@@ -163,6 +171,10 @@ window.__ModuleLoader__.load({
       tokenPattern: 'Token pattern',
       tokenPatternPlaceholder: 'token=([A-Za-z0-9_-]+)',
       badTokenPattern: 'Token pattern must be a valid regular expression on one line.',
+      sshOptions: 'SSH options',
+      sshOptionsPlaceholder: 'ProxyJump=user@jump',
+      sshOptionsHint: 'One Key=Value per line (ProxyJump, IdentityFile, Port, User, timeouts). Values cannot contain spaces.',
+      badSshOptions: 'Use one allowed Key=Value per line; values cannot contain spaces.',
       bundles: 'Provision bundles',
       bundlesPlaceholder: 'dsh-context@0.78.0 … (optional)',
       badBundles: 'Bundle specs may contain letters, digits, @ / . _ : + - only.',
@@ -333,6 +345,10 @@ window.__ModuleLoader__.load({
       tokenPattern: 'Token 匹配',
       tokenPatternPlaceholder: 'token=([A-Za-z0-9_-]+)',
       badTokenPattern: 'Token 匹配必须是单行有效正则。',
+      sshOptions: 'SSH 参数',
+      sshOptionsPlaceholder: 'ProxyJump=user@jump',
+      sshOptionsHint: '每行一个 Key=Value（ProxyJump、IdentityFile、Port、User、超时等）；值不能包含空格。',
+      badSshOptions: '每行一个允许的 Key=Value；值不能包含空格。',
       bundles: '部署时安装的 bundles',
       bundlesPlaceholder: 'dsh-context@0.78.0 …（可选）',
       badBundles: 'bundle 规格只能包含字母、数字和 @ / . _ : + -。',
@@ -516,6 +532,7 @@ window.__ModuleLoader__.load({
         syncAgents: row.syncAgents !== false,
         syncPatch: row.syncPatch !== false,
         tokenPattern: textOf(row.tokenPattern),
+        sshOptions: Array.isArray(row.sshOptions) ? row.sshOptions.join('\n') : textOf(row.sshOptions),
         bundles: textOf(row.bundles),
         sidebar: row.sidebar !== false,
         // Draft-only: the mode picks which side is saved, while both address
@@ -695,6 +712,19 @@ window.__ModuleLoader__.load({
           if (tokenPattern.length > 200 || /[\r\n]/.test(tokenPattern)) throw new Error(where + t('badTokenPattern'));
           try { new RegExp(tokenPattern); } catch { throw new Error(where + t('badTokenPattern')); }
         }
+        const sshOptions = [];
+        for (const line of String(row.sshOptions || '').split('\n')) {
+          const text = line.trim();
+          if (!text) continue;
+          const at = text.indexOf('=');
+          const key = at > 0 ? text.slice(0, at).trim() : '';
+          const optionValue = at > 0 ? text.slice(at + 1).trim() : '';
+          if (!SSH_OPTION_KEYS.has(key) || !SSH_OPTION_VALUE.test(optionValue)) {
+            throw new Error(where + t('badSshOptions'));
+          }
+          const option = key + '=' + optionValue;
+          if (!sshOptions.includes(option)) sshOptions.push(option);
+        }
         const bundles = row.bundles.trim();
         if (bundles) {
           for (const spec of bundles.split(/\s+/)) {
@@ -714,6 +744,7 @@ window.__ModuleLoader__.load({
         if (row.syncAgents === false) value.syncAgents = false;
         if (row.syncPatch === false) value.syncPatch = false;
         if (tokenPattern) value.tokenPattern = tokenPattern;
+        if (sshOptions.length) value.sshOptions = sshOptions;
         if (bundles) value.bundles = bundles;
         if (row.sidebar === false) value.sidebar = false;
         values.push(value);
@@ -1141,6 +1172,17 @@ window.__ModuleLoader__.load({
                       onChange: (event) => patchRow(index, 'syncPatch', event.target.checked),
                     }),
                     h('span', null, t('syncPatch'))))
+                : null,
+              mode === 'ssh'
+                ? h('div', { className: 'rh-fields' },
+                  h('label', { className: 'rh-field rh-wide', key: 'sshOptions' },
+                    h('span', null, t('sshOptions')),
+                    h('textarea', {
+                      rows: 3, value: row.sshOptions, placeholder: t('sshOptionsPlaceholder'),
+                      'aria-label': t('sshOptions'), title: t('sshOptionsHint'),
+                      spellCheck: false, disabled: busy,
+                      onChange: (event) => patchRow(index, 'sshOptions', event.target.value),
+                    })))
                 : null)
           );
         }),
@@ -1195,6 +1237,8 @@ window.__ModuleLoader__.load({
 .dsh-remote-hosts-settings .rh-adv[open]>summary::before{content:'▾'}
 .dsh-remote-hosts-settings .rh-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:10px}
 .dsh-remote-hosts-settings .rh-section{margin-top:12px;font-size:11.5px;color:var(--dsw-alias-label-secondary)}
+.dsh-remote-hosts-settings .rh-wide{grid-column:1/-1}
+.dsh-remote-hosts-settings textarea{box-sizing:border-box;width:100%;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px;color:inherit;resize:vertical;min-height:56px}
 .dsh-remote-hosts-settings .rh-check{display:flex;align-items:center;gap:6px;align-self:end;min-width:0;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer}
 .dsh-remote-hosts-settings .rh-check input{width:auto;margin:0}
 .dsh-remote-hosts-settings .rh-field{display:flex;flex-direction:column;gap:4px;min-width:0}

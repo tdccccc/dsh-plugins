@@ -19,6 +19,10 @@
 # Progress goes to stdout and failures to stderr so the plugin can show both.
 set -eu
 
+# The plugin passes audited "-o Key=Value" options through this variable; only
+# validated tokens, so the unquoted expansion is safe.
+SSH_OPTS=${DSH_SSH_OPTIONS:-}
+
 if [ $# -lt 1 ]; then
   printf 'usage: update.sh <ssh-host> [--version V | --tag T] [--port N] [--unit NAME] [--kind KIND] [--dry-run] [--no-restart]\n' >&2
   exit 2
@@ -59,7 +63,7 @@ printf '== %s ==\n' "$HOST"
 
 # One remote shell carries the whole probe and update so every step sees the
 # same toolchain; sh -s reads the payload below from stdin.
-ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" "sh -s -- '$VERSION' '$TAG' '$PORT' '$RESTART' '$DRY' '$UNIT' '$KIND'" <<'REMOTE'
+ssh $SSH_OPTS -o BatchMode=yes -o ConnectTimeout=10 "$HOST" "sh -s -- '$VERSION' '$TAG' '$PORT' '$RESTART' '$DRY' '$UNIT' '$KIND'" <<'REMOTE'
 set -u
 VERSION=$1
 TAG=$2

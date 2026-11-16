@@ -20,6 +20,13 @@
 # Progress goes to stdout; failures go to stderr so the plugin can show them.
 set -eu
 
+# The plugin passes audited "-o Key=Value" options through this variable; only
+# validated tokens, so the unquoted expansion is safe.
+SSH_OPTS=${DSH_SSH_OPTIONS:-}
+
+RSYNC_SSH="ssh"
+[ -n "$SSH_OPTS" ] && RSYNC_SSH="ssh $SSH_OPTS"
+
 say() { printf '%s\n' "$*"; }
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
@@ -193,13 +200,13 @@ if [ "$DRY" = 1 ]; then
 fi
 
 if [ "$COPY_AGENTS" = 1 ]; then
-  rsync -az "$HOME/.dsh/AGENTS.md" "$HOST:.dsh/AGENTS.md"
+  rsync -az -e "$RSYNC_SSH" "$HOME/.dsh/AGENTS.md" "$HOST:.dsh/AGENTS.md"
 fi
 if [ "$COPY_PATCH" = 1 ]; then
-  rsync -az "$TMP/web-patch.yml" "$HOST:.dsh/profiles/$PROFILE/cordis.patch.yml"
+  rsync -az -e "$RSYNC_SSH" "$TMP/web-patch.yml" "$HOST:.dsh/profiles/$PROFILE/cordis.patch.yml"
 fi
-rsync -az "$TMP/remote.env" "$HOST:.dsh/remote.env"
-ssh "$HOST" 'chmod 600 ~/.dsh/remote.env'
+rsync -az -e "$RSYNC_SSH" "$TMP/remote.env" "$HOST:.dsh/remote.env"
+ssh $SSH_OPTS "$HOST" 'chmod 600 ~/.dsh/remote.env'
 
 if [ "$RESTART" = 1 ]; then
   say "   restarting $UNIT"
@@ -210,7 +217,7 @@ if [ "$RESTART" = 1 ]; then
     "$HERE/remote.sh" "$HOST" service restart --port "$PORT" --unit "$UNIT" --kind "$KIND" || die "could not restart $UNIT"
   else
     [ "$KIND" = systemd-user ] || die "bin/remote.sh is missing; cannot restart a $KIND service"
-    ssh "$HOST" "systemctl --user restart $UNIT; sleep 6; status=\$(systemctl --user is-active $UNIT); printf '%s: %s\\n' '$UNIT' \"\$status\"; [ \"\$status\" = active ] || exit 3" || die "could not restart $UNIT"
+    ssh $SSH_OPTS "$HOST" "systemctl --user restart $UNIT; sleep 6; status=\$(systemctl --user is-active $UNIT); printf '%s: %s\\n' '$UNIT' \"\$status\"; [ \"\$status\" = active ] || exit 3" || die "could not restart $UNIT"
   fi
   say "   $UNIT restarted"
 else

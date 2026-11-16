@@ -2,6 +2,7 @@ import http from 'node:http';
 import net from 'node:net';
 import { execFile } from 'node:child_process';
 import { freePort } from './tunnel.js';
+import { sshArgs } from './ssh.js';
 
 // Local auth-injecting proxy in front of one remote dsh web instance. The
 // browser talks to 127.0.0.1:<port>; the proxy logs in with the launch token
@@ -195,6 +196,7 @@ export class Proxy {
     this.remotePort = Number(options.remotePort) || 27993;
     this.remoteLog = String(options.remoteLog || '');
     this.tokenPattern = String(options.tokenPattern || '');
+    this.sshOptions = Array.isArray(options.sshOptions) ? options.sshOptions : [];
     this.upstreamHost = String(options.upstreamHost || '127.0.0.1');
     this.upstreamPortOption = options.upstreamPort || 0;
     this.readTokenOverride = typeof options.readToken === 'function' ? options.readToken : null;
@@ -332,7 +334,7 @@ export class Proxy {
     const pattern = this.tokenPattern || DEFAULT_TOKEN_PATTERN;
     const command = 'grep -oE ' + shellQuote(pattern) + ' ' + remotePath(log) + ' | tail -1';
     return new Promise((resolve, reject) => {
-      execFile('ssh', ['-o', 'BatchMode=yes', this.sshHost, command], { timeout: TOKEN_TIMEOUT, maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {
+      execFile('ssh', [...sshArgs(this.sshOptions), '-o', 'BatchMode=yes', this.sshHost, command], { timeout: TOKEN_TIMEOUT, maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {
         if (error) {
           const detail = tail(stderr || '') || tail(stdout || '') || error.message;
           reject(new Error('could not read the launch token: ' + detail));

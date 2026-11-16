@@ -1,5 +1,6 @@
 import net from 'node:net';
 import { spawn } from 'node:child_process';
+import { sshArgs } from './ssh.js';
 
 // One ssh process per server. The OS picks the local port once and it is reused
 // across restarts, so a browser tab pointed at the proxy keeps its origin when
@@ -39,6 +40,7 @@ export class Tunnel {
     this.sshHost = String(options.sshHost || '');
     this.remotePort = Number(options.remotePort) || 0;
     this.localPort = Number(options.localPort) || 0;
+    this.sshOptions = Array.isArray(options.sshOptions) ? options.sshOptions : [];
     this.onState = options.onState || (() => {});
     this.state = 'offline';
     this.error = '';
@@ -101,6 +103,7 @@ export class Tunnel {
     // stop() may have run while the port probe was pending.
     if (this.stopping) { this.setState('offline'); return; }
     const args = [
+      ...sshArgs(this.sshOptions),
       '-o', 'BatchMode=yes',
       '-o', 'ServerAliveInterval=15',
       '-o', 'ServerAliveCountMax=3',

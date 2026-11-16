@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import Schema from '@deepseek-ai/schemastery';
 import { configuredServers } from './lib/config.js';
 import { recentSessions, sessionWindowMinutes } from './lib/sessions.js';
+import { sshArgs, sshEnv } from './lib/ssh.js';
 import { updateState } from './lib/update.js';
 import { Tunnel } from './lib/tunnel.js';
 import { Proxy, checkRequest } from './lib/proxy.js';
@@ -63,6 +64,8 @@ export const Config = Schema.object({
     syncPatch: Schema.boolean().default(true),
     // POSIX ERE read from the remote log; the first capture group is the token.
     tokenPattern: Schema.string().default(''),
+    // Audited "-o Key=Value" list for ProxyJump/Port/IdentityFile etc.
+    sshOptions: Schema.any().default([]),
     // Space-separated dsh profile bundles installed by the provision action.
     bundles: Schema.string().default(''),
     sidebar: Schema.boolean().default(true),
@@ -101,6 +104,7 @@ export const Config = Schema.object({
       syncAgents: 'Copy ~/.dsh/AGENTS.md to the remote profile (default true).',
       syncPatch: 'Copy the source profile patch layer to the remote profile (default true).',
       tokenPattern: 'POSIX ERE that finds the launch token in the remote log; the first capture group is the token. Empty uses token=([A-Za-z0-9_-]+).',
+      sshOptions: 'Audited SSH options as Key=Value lines (ProxyJump, IdentityFile, Port, User, ConnectTimeout, keepalives). Values cannot contain spaces.',
       bundles: 'Space-separated dsh profile bundles provisioned with the host, for example "@deepseek-ai/dsh-experimental-plugin-market-bundle dsh-context@0.78.0".',
       sidebar: 'Show this host as a row in the left sidebar. Hidden hosts stay configured and can be opened from the plugin settings or the overlay switcher.',
     },
@@ -127,6 +131,7 @@ export const Config = Schema.object({
       syncAgents: '把 ~/.dsh/AGENTS.md 同步到远端 profile（默认开启）。',
       syncPatch: '把来源 profile 的 patch 层同步到远端 profile（默认开启）。',
       tokenPattern: '从远端日志中提取登录 token 的 POSIX ERE，第一个捕获组是 token；留空使用 token=([A-Za-z0-9_-]+)。',
+      sshOptions: '受控的 SSH 参数，每行 Key=Value（ProxyJump、IdentityFile、Port、User、ConnectTimeout、keepalive）；值不能包含空格。',
       bundles: '首次部署时安装的 dsh profile bundles，空格分隔，例如 "@deepseek-ai/dsh-experimental-plugin-market-bundle dsh-context@0.78.0"。',
       sidebar: '在左侧栏显示该主机。隐藏后配置仍然保留，可从插件设置或浮层切换器打开。',
     },
@@ -231,7 +236,7 @@ function readLines(stream, onLine) {
 // Answer with newline-delimited JSON so the browser can show progress while the
 // copy runs: one line event per line of output, then one done event carrying
 // the same readable summary a single-shot answer used to carry.
-function streamCommand(request, args, timeoutMs = SYNC_TIMEOUT_MS, onDone = null) {
+function streamCommand(request, args, timeoutMs = SYNC_TIMEOUT_MS, onDone = null, env = null) {
   // The caller may hold a per-host action lock; release it exactly once, when
   // the child exits, the request is aborted, or no child was started at all.
   let released = false;
@@ -250,6 +255,7 @@ function streamCommand(request, args, timeoutMs = SYNC_TIMEOUT_MS, onDone = null
       // own process group, so one group kill also reaches ssh and the remote
       // tail instead of leaving an orphan behind.
       detached: process.platform !== 'win32',
+      ...(env ? { env } : {}),
     });
   } catch (error) {
     finish();
@@ -323,9 +329,9 @@ function streamCommand(request, args, timeoutMs = SYNC_TIMEOUT_MS, onDone = null
 
 // One-shot remote commands (probe, log tail) answer with JSON instead of a
 // stream, so the route can hand the result straight to the browser.
-function runScript(args, timeoutMs = PROBE_TIMEOUT_MS) {
+function runScript(args, timeoutMs = PROBE_TIMEOUT_MS, env = null) {
   return new Promise((resolve) => {
-    execFile('sh', args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile('sh', args, { timeout: timeoutMs, maxBuffer: 1024 * 1024, ...(env ? { env } : {}) }, (error, stdout, stderr) => {
       resolve({ error: error || null, stdout: String(stdout || ''), stderr: String(stderr || '') });
     });
   });
@@ -366,6 +372,7 @@ class ServerLink {
       sshHost: server.sshHost,
       remotePort: server.remotePort,
       localPort: server.localPort,
+      sshOptions: server.sshOptions,
       onState: () => this.wakeProxy(),
     });
     this.proxy = new Proxy({
@@ -373,6 +380,7 @@ class ServerLink {
       remotePort: server.remotePort,
       remoteLog: server.remoteLog,
       tokenPattern: server.tokenPattern,
+      sshOptions: server.sshOptions,
       upstreamPort: () => (this.tunnel ? this.tunnel.localPort : 0),
     });
   }
@@ -463,7 +471,7 @@ class ServerLink {
     if (server.serviceUnit) args.push('--unit', server.serviceUnit);
     if (server.remoteLog) args.push('--log', server.remoteLog);
     args.push('--sessions-window', String(this.sessionWindow()));
-    const pending = runScript(args, PROBE_TIMEOUT_MS).then(
+    const pending = runScript(args, PROBE_TIMEOUT_MS, sshEnv(this.server.sshOptions)).then(
       ({ error, stdout, stderr }) => {
         const payload = parseJsonLine(stdout);
         const result = payload && payload.ok && payload.info
@@ -565,7 +573,8 @@ export function apply(ctx, config) {
     && link.server.serviceUnit === server.serviceUnit
     && link.server.profile === server.profile
     && link.server.updateChannel === server.updateChannel
-    && link.server.tokenPattern === server.tokenPattern;
+    && link.server.tokenPattern === server.tokenPattern
+    && link.server.sshOptions.join('\n') === server.sshOptions.join('\n');
 
   // The server list lives in volatile settings, so it can change without this
   // plugin being remounted. Reconcile creates, replaces, and stops links to
@@ -860,7 +869,7 @@ export function apply(ctx, config) {
       // --dry-run stops before any copy or restart, so it wins over --restart.
       if (dryRun) args.push('--dry-run');
       else if (restart) args.push('--restart');
-      return streamCommand(request, args, SYNC_TIMEOUT_MS, finishAction(host));
+      return streamCommand(request, args, SYNC_TIMEOUT_MS, finishAction(host), sshEnv(server.sshOptions));
     },
   }), 'remote-hosts: sync route');
 
@@ -906,7 +915,7 @@ export function apply(ctx, config) {
       if (dryRun) args.push('--dry-run');
       const link = links.get(host);
       if (link) link.clearProbe();
-      return streamCommand(request, args, PROVISION_TIMEOUT_MS, finishAction(host));
+      return streamCommand(request, args, PROVISION_TIMEOUT_MS, finishAction(host), sshEnv(server.sshOptions));
     },
   }), 'remote-hosts: provision route');
 
@@ -949,7 +958,7 @@ export function apply(ctx, config) {
       else if (payload.restart === false) args.push('--no-restart');
       const link = links.get(host);
       if (link) link.clearProbe();
-      return streamCommand(request, args, UPDATE_TIMEOUT_MS, finishAction(host));
+      return streamCommand(request, args, UPDATE_TIMEOUT_MS, finishAction(host), sshEnv(server.sshOptions));
     },
   }), 'remote-hosts: update route');
 
@@ -1011,7 +1020,7 @@ export function apply(ctx, config) {
       if (server.serviceUnit) args.push('--unit', server.serviceUnit);
       const link = links.get(host);
       if (link) link.clearProbe();
-      return streamCommand(request, args, SERVICE_TIMEOUT_MS, finishAction(host));
+      return streamCommand(request, args, SERVICE_TIMEOUT_MS, finishAction(host), sshEnv(server.sshOptions));
     },
   }), 'remote-hosts: service route');
 
@@ -1038,9 +1047,9 @@ export function apply(ctx, config) {
         args.push('--follow');
         // The stream stays open until the browser aborts it; stopping the
         // request kills the ssh group and the remote tail.
-        return streamCommand(request, args, 0);
+        return streamCommand(request, args, 0, null, sshEnv(server.sshOptions));
       }
-      const { error, stdout, stderr } = await runScript(args, LOG_TIMEOUT_MS);
+      const { error, stdout, stderr } = await runScript(args, LOG_TIMEOUT_MS, sshEnv(server.sshOptions));
       if (error) return jsonResponse({ ok: false, error: describeFailure(error, stdout, stderr) });
       return jsonResponse({ ok: true, text: stdout });
     },

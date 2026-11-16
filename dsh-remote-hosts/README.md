@@ -41,7 +41,10 @@ A row with `sshHost` is fully managed: one
 `ssh -N -L 127.0.0.1:<local>:127.0.0.1:<remotePort>` tunnel per endpoint and an
 auth-injecting proxy on a free loopback port. The proxy reads the launch token
 from the remote log over SSH (using the row's `tokenPattern`, default
-`token=([A-Za-z0-9_-]+)`), logs in, and attaches the cookie itself. It only
+`token=([A-Za-z0-9_-]+)`), logs in, and attaches the cookie itself.
+The row's `sshOptions` are added as audited `-o` flags to the tunnel and the
+token read, and are passed to the helper scripts through `DSH_SSH_OPTIONS`, so a
+jump host or a non-default port works without editing `~/.ssh/config`. It only
 listens on 127.0.0.1 and refuses non-loopback Hosts, foreign Origins and
 cross-site requests; frame navigation is the one allowed cross-site shape
 because the desktop shell page runs on the `dsh-app://` scheme. Cross-site
@@ -118,6 +121,7 @@ dsh-remote-hosts → Configure**, or in the profile patch:
 | `localPort` | Fixed local tunnel port; 0 picks a free one. Must be unique when set. |
 | `remoteLog` | Remote log the login token is read from; defaults to `~/.dsh/web-<remotePort>.log`. |
 | `tokenPattern` | POSIX ERE that finds the launch token in that log; the first capture group is the token. Empty uses `token=([A-Za-z0-9_-]+)`. |
+| `sshOptions` | Audited `Key=Value` lines passed as `-o` to the tunnel, token read and helper scripts: `ProxyJump`, `IdentityFile`, `Port`, `User`, timeouts, keepalives. Values cannot contain spaces. |
 | `serviceKind` | `systemd-user` (default for ssh rows), `launchd-user`, `command`, or `external`. |
 | `serviceUnit` | systemd unit or launchd label; defaults to `dsh-web` for the managed kinds. |
 | `profile` | Remote profile directory under `~/.dsh/profiles`; default `web`. |
@@ -240,6 +244,7 @@ bin/remote.sh user@host probe --sessions-window 10
 bin/remote.sh user@host logs --lines 50
 bin/remote.sh user@host logs --follow
 bin/remote.sh user@host service restart --dry-run
+DSH_SSH_OPTIONS='-o ProxyJump=user@jump -o Port=2222' bin/remote.sh user@host probe
 ```
 
 `provision.sh` is the only script that installs a remote from scratch; sync and

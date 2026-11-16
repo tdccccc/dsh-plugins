@@ -108,6 +108,13 @@ test('the token pattern falls back when invalid', () => {
   assert.equal(toServer({ id: 'x', sshHost: 'host', tokenPattern: 'a\nb' }).tokenPattern, '');
 });
 
+test('ssh options are audited', () => {
+  assert.deepEqual(toServer({
+    id: 'x', sshHost: 'host', sshOptions: ['ProxyJump=user@jump', 'ProxyCommand=bad'],
+  }).sshOptions, ['ProxyJump=user@jump']);
+  assert.deepEqual(toServer({ id: 'x', sshHost: 'host' }).sshOptions, []);
+});
+
 test('provision bundles stay a trimmed string', () => {
   assert.equal(toServer({ id: 'x', sshHost: 'host', bundles: ' dsh-context@0.78.0 ' }).bundles, 'dsh-context@0.78.0');
   assert.equal(toServer({ id: 'y', sshHost: 'host' }).bundles, '');

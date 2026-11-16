@@ -83,6 +83,26 @@ test('settings sync selects its source and keys', async () => {
   }
 });
 
+test('helper scripts pass the configured ssh options', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-hosts-'));
+  try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'ssh'), '#!/bin/sh\nprintf "%s\\n" "$*"\n');
+    chmodSync(join(bin, 'ssh'), 0o755);
+    const result = await run([script('remote.sh'), 'demo', 'logs', '--follow'], {
+      env: {
+        ...process.env, HOME: dir, PATH: bin + ':' + process.env.PATH,
+        DSH_SSH_OPTIONS: '-o Port=2222',
+      },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /-o Port=2222/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('logs follow passes the flag to the remote payload', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-hosts-'));
   try {

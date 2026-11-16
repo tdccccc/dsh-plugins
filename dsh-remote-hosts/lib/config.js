@@ -4,6 +4,8 @@
 // One row is one endpoint, not one machine: two rows may share an sshHost with
 // different remotePort/unit/profile, which is how a machine that runs several
 // dsh instances is represented.
+import { normalizeSshOptions } from './ssh.js';
+
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/i;
 const SERVICE_KINDS = new Set(['systemd-user', 'launchd-user', 'command', 'external']);
 const UNIT_PATTERN = /^[A-Za-z0-9@._:-]{1,128}$/;
@@ -82,6 +84,7 @@ export function toServer(row) {
     syncAgents: row.syncAgents !== false,
     syncPatch: row.syncPatch !== false,
     tokenPattern,
+    sshOptions: normalizeSshOptions(row.sshOptions),
     bundles,
     // Sidebar visibility is a config choice so a configured host can stay out
     // of the left column without being deleted.

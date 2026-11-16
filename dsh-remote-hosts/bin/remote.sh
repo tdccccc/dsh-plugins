@@ -18,6 +18,10 @@
 # bin/update.sh.
 set -eu
 
+# The plugin passes audited "-o Key=Value" options through this variable; only
+# validated tokens, so the unquoted expansion is safe.
+SSH_OPTS=${DSH_SSH_OPTIONS:-}
+
 usage() {
   printf '%s\n' \
     'usage: remote.sh <ssh-host> probe   [--port N] [--unit U] [--kind KIND] [--log PATH] [--sessions-window N]' \
@@ -669,7 +673,7 @@ add_warn() {
 do_probe() {
   OUT=
   RC=0
-  OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" \
+  OUT=$(ssh $SSH_OPTS -o BatchMode=yes -o ConnectTimeout=10 "$HOST" \
     "sh -s -- probe '$PORT' '$UNIT' '$KIND' '$LOG' '$SESSION_WINDOW'" \
     < "$TMP/payload.sh" 2>"$TMP/ssh.err") || RC=$?
 
@@ -787,7 +791,7 @@ EOF
 # -- logs ------------------------------------------------------------------
 do_logs() {
   RC=0
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" \
+  ssh $SSH_OPTS -o BatchMode=yes -o ConnectTimeout=10 "$HOST" \
     "sh -s -- logs '$PORT' '$LOG' '$LINES' '$FOLLOW'" \
     < "$TMP/payload.sh" || RC=$?
   if [ "$RC" -ne 0 ]; then
@@ -823,7 +827,7 @@ do_service() {
         esac
         ;;
     esac
-    say "   [dry-run] would run: ssh $HOST $PLAN"
+    say "   [dry-run] would run: ssh $SSH_OPTS $HOST $PLAN"
     case "$ACTION" in
       start|restart)
         say "   [dry-run] would wait up to 30s for $UNIT to be running"
@@ -839,7 +843,7 @@ do_service() {
   fi
 
   RC=0
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" \
+  ssh $SSH_OPTS -o BatchMode=yes -o ConnectTimeout=10 "$HOST" \
     "sh -s -- service '$ACTION' '$PORT' '$UNIT' '$KIND' '$PORT_SET'" \
     < "$TMP/payload.sh" || RC=$?
   if [ "$RC" -ne 0 ]; then
