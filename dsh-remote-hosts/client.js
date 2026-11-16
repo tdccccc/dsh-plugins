@@ -166,6 +166,10 @@ window.__ModuleLoader__.load({
       discard: 'Discard changes',
       saved: 'Saved.',
       saveFailed: 'Could not save:',
+      search: 'Search hosts',
+      searchPlaceholder: 'Filter by name, ID, SSH host or URL',
+      noMatches: 'No hosts match "{query}".',
+      drag: 'Drag to reorder',
       test: 'Test connection',
       testing: 'Testing…',
       testTitle: 'Probe the saved configuration of this host',
@@ -319,6 +323,10 @@ window.__ModuleLoader__.load({
       discard: '放弃修改',
       saved: '已保存。',
       saveFailed: '保存失败：',
+      search: '搜索主机',
+      searchPlaceholder: '按名称、ID、SSH 主机或地址过滤',
+      noMatches: '没有匹配“{query}”的主机。',
+      drag: '拖动排序',
       test: '测试连接',
       testing: '测试中…',
       testTitle: '检测该主机已保存的配置',
@@ -385,6 +393,7 @@ window.__ModuleLoader__.load({
       left.length === right.length && left.every((server, index) => {
         const other = right[index];
         return server.id === other.id && server.label === other.label && server.url === other.url
+          && (server.sshHost || '') === (other.sshHost || '')
           && (server.sidebar !== false) === (other.sidebar !== false);
       });
 
@@ -665,6 +674,9 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false);
       const [notice, setNotice] = React.useState('');
       const [failed, setFailed] = React.useState(false);
+      const [query, setQuery] = React.useState('');
+      const [dragIndex, setDragIndex] = React.useState(null);
+      const [dragOver, setDragOver] = React.useState(null);
       // id -> { busy, at, info, update, error } from the last 测试连接 on that card.
       const [tests, setTests] = React.useState({});
       // id -> update state from the Host's cached probe, fetched once per save.
@@ -721,6 +733,7 @@ window.__ModuleLoader__.load({
         setNotice(t('allShown'));
       };
       const addRow = () => {
+        setQuery('');
         setDraft((current) => [...current, makeRow({ id: '', label: '', url: '', sshHost: '' })]);
         setNotice('');
       };
@@ -736,17 +749,18 @@ window.__ModuleLoader__.load({
         setDraft((current) => current.filter((_, i) => i !== index));
         setNotice('');
       };
-      const moveRow = (index, delta) => {
+      const moveRowTo = (from, to) => {
+        if (from === to) return;
         setDraft((current) => {
-          const target = index + delta;
-          if (target < 0 || target >= current.length) return current;
+          if (from < 0 || to < 0 || from >= current.length || to >= current.length) return current;
           const next = current.slice();
-          const [row] = next.splice(index, 1);
-          next.splice(target, 0, row);
+          const [row] = next.splice(from, 1);
+          next.splice(to, 0, row);
           return next;
         });
         setNotice('');
       };
+      const moveRow = (index, delta) => moveRowTo(index, index + delta);
       const openRow = (index) => {
         const row = draft && draft[index];
         if (!row || !row.id.trim()) return;
@@ -920,6 +934,12 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', onClick: () => store.refresh() }, t('retry')));
       }
 
+      const searchText = query.trim().toLowerCase();
+      const visible = draft
+        .map((row, index) => ({ row, index }))
+        .filter(({ row }) => !searchText || [row.label, row.id, row.sshHost, row.url]
+          .some((value) => String(value || '').toLowerCase().includes(searchText)));
+
       return h('form', { className: 'dsh-remote-hosts-settings', onSubmit: save },
         h('style', null, SETTINGS_CSS),
         h('div', { className: 'rh-head' },
@@ -933,15 +953,58 @@ window.__ModuleLoader__.load({
             }, t('showAll')),
             h('button', { type: 'button', className: 'rh-add', disabled: busy, onClick: addRow }, '+ ' + t('add')))),
         snapshot.error ? h('p', { role: 'alert' }, snapshot.error) : null,
+        draft.length
+          ? h('div', { className: 'rh-search' },
+            h('input', {
+              type: 'search',
+              value: query,
+              placeholder: t('searchPlaceholder'),
+              'aria-label': t('search'),
+              disabled: busy,
+              onChange: (event) => setQuery(event.target.value),
+              onKeyDown: (event) => { if (event.key === 'Enter') event.preventDefault(); },
+            }))
+          : null,
         draft.length === 0
           ? h('div', { className: 'rh-empty-card' },
             h('p', null, t('empty')),
             h('button', { type: 'button', className: 'rh-add', disabled: busy, onClick: addRow }, '+ ' + t('add')))
           : null,
-        ...draft.map((row, index) => {
+        ...visible.map(({ row, index }) => {
           const mode = modeOf(row);
-          return h('div', { className: 'rh-card', key: row.key },
+          return h('div', {
+            className: 'rh-card'
+              + (dragIndex === index ? ' rh-dragging' : '')
+              + (dragOver === index ? ' rh-drop' : ''),
+            key: row.key,
+            onDragOver: (event) => {
+              if (dragIndex === null || searchText) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'move';
+              if (dragOver !== index) setDragOver(index);
+            },
+            onDrop: (event) => {
+              if (dragIndex === null || searchText) return;
+              event.preventDefault();
+              moveRowTo(dragIndex, index);
+              setDragIndex(null);
+              setDragOver(null);
+            },
+          },
             h('div', { className: 'rh-card-head' },
+              h('span', {
+                className: 'rh-drag',
+                draggable: !busy && !searchText,
+                title: t('drag'),
+                'aria-hidden': 'true',
+                onDragStart: (event) => {
+                  if (busy || searchText) { event.preventDefault(); return; }
+                  setDragIndex(index);
+                  event.dataTransfer.effectAllowed = 'move';
+                  try { event.dataTransfer.setData('text/plain', String(index)); } catch {}
+                },
+                onDragEnd: () => { setDragIndex(null); setDragOver(null); },
+              }, '⋮⋮'),
               h('span', { className: 'rh-avatar', 'aria-hidden': 'true' }, (row.label.trim() || row.id.trim() || '?').slice(0, 1).toUpperCase()),
               h('div', { className: 'rh-card-id' },
                 h('span', { className: 'rh-card-title' }, row.label.trim() || row.id.trim() || t('newServer')),
@@ -1005,6 +1068,9 @@ window.__ModuleLoader__.load({
                 : null)
           );
         }),
+        draft.length > 0 && visible.length === 0
+          ? h('div', { className: 'rh-empty-card' }, h('p', null, t('noMatches', { query: query.trim() })))
+          : null,
         h('div', { className: 'rh-actions' },
           h('span', { className: 'rh-spacer' }),
           h('button', { type: 'submit', className: 'rh-save', disabled: busy }, busy ? t('saving') : t('save')),
@@ -1070,6 +1136,12 @@ window.__ModuleLoader__.load({
 .dsh-remote-hosts-settings .rh-actions{display:flex;gap:8px;align-items:center;margin-top:16px}
 .dsh-remote-hosts-settings .rh-spacer{flex:1}
 .dsh-remote-hosts-settings .rh-head-actions{display:flex;gap:8px;flex:0 0 auto;align-items:flex-start}
+.dsh-remote-hosts-settings .rh-search{margin:0 0 10px}
+.dsh-remote-hosts-settings .rh-search input{width:100%}
+.dsh-remote-hosts-settings .rh-drag{flex:0 0 auto;cursor:grab;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1;letter-spacing:-2px;user-select:none;opacity:.55}
+.dsh-remote-hosts-settings .rh-drag:active{cursor:grabbing}
+.dsh-remote-hosts-settings .rh-card.rh-dragging{opacity:.55}
+.dsh-remote-hosts-settings .rh-card.rh-drop{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 1px var(--dsw-alias-brand-primary)}
 .dsh-remote-hosts-settings .rh-soft{flex:0 0 auto;padding:7px 13px;border-radius:9px;border:1px solid var(--dsw-alias-border-l1);color:inherit;background:transparent;font-weight:500;cursor:pointer}
 .dsh-remote-hosts-settings .rh-soft:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}
 .dsh-remote-hosts-settings .rh-hint{display:block;margin-top:10px;font-size:11.5px}
@@ -1121,11 +1193,15 @@ window.__ModuleLoader__.load({
         const [follow, setFollow] = React.useState(false);
         const [probe, setProbe] = React.useState({ id: '', at: 0, info: null, error: '' });
         const [menuOpen, setMenuOpen] = React.useState(false);
+        const [hostMenuOpen, setHostMenuOpen] = React.useState(false);
+        const [hostQuery, setHostQuery] = React.useState('');
         const logRef = React.useRef(null);
         const abortRef = React.useRef(null);
         const followRef = React.useRef(null);
         const menuRef = React.useRef(null);
         const menuOpenRef = React.useRef(false);
+        const hostMenuRef = React.useRef(null);
+        const hostMenuOpenRef = React.useRef(false);
         const lastToggle = React.useRef(0);
 
         // The global keydown listener is bound once per host and would otherwise
@@ -1134,6 +1210,11 @@ window.__ModuleLoader__.load({
         const setMenu = (open) => {
           menuOpenRef.current = open;
           setMenuOpen(open);
+        };
+        const setHostMenu = (open) => {
+          hostMenuOpenRef.current = open;
+          setHostMenuOpen(open);
+          if (!open) setHostQuery('');
         };
 
         React.useEffect(() => {
@@ -1157,6 +1238,18 @@ window.__ModuleLoader__.load({
           document.addEventListener('mousedown', close, true);
           return () => document.removeEventListener('mousedown', close, true);
         }, [menuOpen]);
+
+        // The host switcher is a searchable popover for the same reason: a long
+        // host list needs filtering, and grouping by sshHost keeps its shape.
+        React.useEffect(() => {
+          if (!hostMenuOpen) return undefined;
+          const close = (event) => {
+            if (hostMenuRef.current && hostMenuRef.current.contains(event.target)) return;
+            setHostMenu(false);
+          };
+          document.addEventListener('mousedown', close, true);
+          return () => document.removeEventListener('mousedown', close, true);
+        }, [hostMenuOpen]);
 
         const flat = (value) => String(value || '').trim().split('\n').filter((line) => line.trim()).slice(-3).join(' / ');
 
@@ -1530,8 +1623,14 @@ window.__ModuleLoader__.load({
           // while focus is still in the outer shell.
           const onKey = (event) => {
             if (event.key !== 'Escape') return;
-            // An open actions menu owns Escape: close the menu and stay on the
-            // remote page instead of jumping back from under the menu.
+            // An open host switcher or actions menu owns Escape: close it and
+            // stay on the remote page instead of jumping back from under it.
+            if (hostMenuOpenRef.current) {
+              event.preventDefault();
+              event.stopPropagation();
+              setHostMenu(false);
+              return;
+            }
             if (menuOpenRef.current) {
               event.preventDefault();
               event.stopPropagation();
@@ -1587,6 +1686,7 @@ window.__ModuleLoader__.load({
               followRef.current = null;
             }
             setFollow(false);
+            setHostMenu(false);
             activateHost(active.id, false);
           };
         }, [activeId]);
@@ -1599,6 +1699,7 @@ window.__ModuleLoader__.load({
           if (cached && cached.at && Date.now() - cached.at < 60000) setProbe({ id: active.id, ...cached });
           else readProbe(active, false).catch(() => {});
           setMenu(false);
+          setHostMenu(false);
         }, [activeId]);
 
         const entryFor = (server) => s.status[server.id] || null;
@@ -1673,6 +1774,69 @@ window.__ModuleLoader__.load({
           },
         }, label);
 
+        // Hosts are grouped by the machine they share; the filter matches label,
+        // id and sshHost so a long list stays findable.
+        const hostGroups = [];
+        const hostGroupIndex = new Map();
+        for (const server of servers) {
+          const key = server.sshHost || '';
+          if (!hostGroupIndex.has(key)) {
+            const group = { key, rows: [] };
+            hostGroupIndex.set(key, group);
+            hostGroups.push(group);
+          }
+          hostGroupIndex.get(key).rows.push(server);
+        }
+        const hostMatches = (server) => {
+          const query = hostQuery.trim().toLowerCase();
+          if (!query) return true;
+          return [server.label, server.id, server.sshHost]
+            .some((value) => String(value || '').toLowerCase().includes(query));
+        };
+        const hostMenuGroups = hostGroups
+          .map((group) => ({ ...group, rows: group.rows.filter(hostMatches) }))
+          .filter((group) => group.rows.length > 0);
+        const grouped = hostGroups.length > 1 || hostGroups.some((group) => group.rows.length > 1);
+        const hostItem = (server) => {
+          const update = updateFor(server);
+          return h('button', {
+            key: server.id,
+            type: 'button',
+            role: 'option',
+            'aria-selected': active && active.id === server.id ? 'true' : 'false',
+            onClick: () => { openServer(server.id); setHostMenu(false); },
+            style: {
+              display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
+              textAlign: 'left', font: 'inherit', fontSize: '13px', color: 'inherit',
+              padding: '6px 8px', border: 0, borderRadius: '6px', cursor: 'pointer',
+              background: active && active.id === server.id
+                ? 'var(--dsw-alias-bg-layer-2, rgba(128,128,128,0.12))'
+                : 'transparent',
+            },
+          },
+            h('span', {
+              style: {
+                display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%',
+                background: dotColor(stateOf(server)), flex: '0 0 auto',
+              },
+            }),
+            h('span', {
+              style: {
+                flex: '1 1 auto', minWidth: 0, overflow: 'hidden',
+                textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              },
+            }, server.label),
+            update
+              ? h('span', {
+                title: translate('updateAvailableTitle', { current: update.current, target: update.target }),
+                style: { flex: '0 0 auto', fontSize: '11px', color: 'var(--dsw-alias-state-warning-primary, #f08c00)' },
+              }, '↑')
+              : null,
+            stateLabel(server)
+              ? h('span', { style: { flex: '0 0 auto', fontSize: '11px', opacity: 0.6 } }, stateLabel(server))
+              : null);
+        };
+
         return h('div', {
           style: {
             position: 'fixed', top: 0, right: 0, bottom: 0, left: s.inset + 'px',
@@ -1715,25 +1879,75 @@ window.__ModuleLoader__.load({
                     background: dotColor(stateOf(active || servers[0])), flex: '0 0 auto',
                   },
                 }),
-                h('select', {
-                  value: active ? active.id : '',
-                  onChange: (event) => { if (event.target.value) openServer(event.target.value); },
-                  title: translate('switchHost'),
-                  'aria-label': translate('switchHost'),
-                  style: {
-                    cursor: 'pointer', font: 'inherit', fontSize: '13px',
-                    border: '1px solid rgba(128,128,128,0.35)', borderRadius: '8px',
-                    padding: '4px 8px', background: 'transparent', color: 'inherit',
-                    maxWidth: '240px',
-                  },
+                h('span', {
+                  ref: hostMenuRef,
+                  style: { position: 'relative', display: 'inline-flex', minWidth: 0 },
                 },
-                  ...servers.map((server) => h('option', {
-                    key: server.id,
-                    value: server.id,
-                  }, server.label
-                    + (stateLabel(server) ? ' · ' + stateLabel(server) : '')
-                    + (updateFor(server) ? ' · ' + translate('updateAvailable') : '')))
-                )
+                  h('button', {
+                    type: 'button',
+                    onClick: () => setHostMenu(!hostMenuOpenRef.current),
+                    title: translate('switchHost'),
+                    'aria-label': translate('switchHost'),
+                    'aria-haspopup': 'listbox',
+                    'aria-expanded': hostMenuOpen ? 'true' : 'false',
+                    style: {
+                      cursor: 'pointer', font: 'inherit', fontSize: '13px',
+                      border: '1px solid rgba(128,128,128,0.35)', borderRadius: '8px',
+                      padding: '4px 8px', background: 'transparent', color: 'inherit',
+                      maxWidth: '240px', display: 'inline-flex', alignItems: 'center', gap: '6px',
+                    },
+                  },
+                    h('span', {
+                      style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                    }, active ? active.label : (servers[0] ? servers[0].label : translate('switchHost'))),
+                    h('span', { style: { fontSize: '10px', opacity: 0.6 } }, '▾')),
+                  hostMenuOpen
+                    ? h('div', {
+                      role: 'listbox',
+                      'aria-label': translate('switchHost'),
+                      style: {
+                        position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 40,
+                        width: '280px', maxHeight: '360px', overflowY: 'auto',
+                        display: 'flex', flexDirection: 'column', gap: '2px',
+                        padding: '6px', color: 'inherit',
+                        background: 'var(--dsw-alias-bg-layer-1, #fff)',
+                        border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.35))',
+                        borderRadius: '8px', boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+                      },
+                    },
+                      h('input', {
+                        type: 'search',
+                        autoFocus: true,
+                        value: hostQuery,
+                        placeholder: translate('searchPlaceholder'),
+                        'aria-label': translate('search'),
+                        onChange: (event) => setHostQuery(event.target.value),
+                        style: {
+                          width: '100%', boxSizing: 'border-box', marginBottom: '4px',
+                          padding: '5px 8px', font: 'inherit', fontSize: '12px',
+                          color: 'inherit', background: 'var(--dsw-alias-bg-layer-2, rgba(128,128,128,0.08))',
+                          border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.35))',
+                          borderRadius: '6px',
+                        },
+                      }),
+                      hostMenuGroups.length === 0
+                        ? h('div', { style: { padding: '8px', fontSize: '12px', opacity: 0.65 } },
+                          translate('noMatches', { query: hostQuery.trim() }))
+                        : hostMenuGroups.map((group) => h('div', {
+                          key: group.key || ':direct',
+                          style: { display: 'flex', flexDirection: 'column', gap: '1px' },
+                        },
+                          grouped && group.key
+                            ? h('div', {
+                              style: {
+                                padding: '4px 8px 2px', fontSize: '10.5px', opacity: 0.55,
+                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                              },
+                            }, group.key)
+                            : null,
+                          ...group.rows.map(hostItem)))
+                    )
+                    : null)
               ),
             activeUpdate
               ? h('span', {

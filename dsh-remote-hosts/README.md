@@ -16,10 +16,11 @@ instances is managed.
   the left sidebar; the sidebar and the window chrome stay usable.
 - A visited remote page stays mounted while the conversation is shown, so
   switching back and forth does not reload it. Reload is explicit.
-- The overlay header carries back-to-conversation, a host switcher with a
-  connection dot, the primary **同步配置** and **更新 dsh** actions, an actions
-  menu (copy sync, preview sync, remote check, restart service, remote log,
-  reload, open in browser), a status line, and a log toggle.
+- The overlay header carries back-to-conversation, a searchable host switcher
+  (grouped by `sshHost`, with a connection dot and an update marker), the
+  primary **同步配置** and **更新 dsh** actions, an actions menu (copy sync,
+  preview sync, remote check, restart service, remote log, reload, open in
+  browser), a status line, and a log toggle.
 - Remote state (tunnel + proxy) shows *connecting / online / offline*, or
   *dormant* for a configured host nobody has opened yet; the actions menu
   reports the remote dsh version and service state once checked.
@@ -133,6 +134,9 @@ In the app the same settings are a compact card list:
 - the pin icon toggles the left-sidebar row without deleting the host,
   **Show all in sidebar** marks every card visible again, and the arrows reorder
   rows;
+- a filter box narrows cards by name, ID, SSH host or URL; drag the handle on a
+  card to reorder it, and the arrows remain as the keyboard fallback. The host
+  switcher in the overlay has the same filter and groups rows by `sshHost`;
 - every saved SSH card has **测试连接**: it probes the saved configuration and
   writes the dsh version, service state and port HTTP into the card, or the
   probe failure reason when it cannot reach the host. A new card must be saved

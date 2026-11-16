@@ -57,6 +57,7 @@ test('an external server is described without a managed link', async () => {
     assert.equal(payload.servers.length, 1);
     assert.equal(payload.servers[0].id, 'demo');
     assert.equal(payload.servers[0].managed, false);
+    assert.equal(payload.servers[0].sshHost, '');
     assert.equal(payload.servers[0].sidebar, true);
     assert.equal(payload.servers[0].state, 'external');
     assert.equal(payload.servers[0].proxyUrl, 'http://127.0.0.1:27994/');
@@ -100,6 +101,7 @@ test('a managed host stays dormant until the browser activates it', async () => 
     const payload = await (await host.routes.get('/api/remote-hosts/status').fetch(new Request('http://127.0.0.1/api/remote-hosts/status'))).json();
     assert.equal(payload.servers.length, 1);
     assert.equal(payload.servers[0].managed, true);
+    assert.equal(payload.servers[0].sshHost, 'user@example.invalid');
     assert.equal(payload.servers[0].state, 'dormant');
     assert.equal(payload.servers[0].error, '');
     assert.equal(payload.servers[0].proxyUrl, '');
