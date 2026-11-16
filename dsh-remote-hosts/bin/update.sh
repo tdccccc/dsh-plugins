@@ -12,8 +12,10 @@
 # plugin config uses.
 #
 # The remote side is discovered rather than assumed: the running unit names
-# the Node that serves it, that Node's prefix owns the global @deepseek-ai/dsh
-# package, and the package's own npm replaces it in place.
+# the Node that serves it, the dsh entry names the installed package, and the
+# global root that owns it (npm or pnpm) chooses the upgrade command. An
+# unknown layout prints the discovered paths and the manual command instead of
+# guessing.
 # Progress goes to stdout and failures to stderr so the plugin can show both.
 set -eu
 
@@ -75,6 +77,7 @@ die() { printf '%s\n' "$*" >&2; exit 1; }
 # loaded the installed package, so that prefix owns the copy to replace even
 # when several Node versions live side by side.
 NODE_BIN=""
+PID=""
 case "$KIND" in
   systemd-user)
     if command -v systemctl >/dev/null 2>&1; then
@@ -138,19 +141,6 @@ if [ "$NODE_MAJOR" -lt 24 ] || { [ "$NODE_MAJOR" -eq 24 ] && [ "$NODE_MINOR" -lt
   die "dsh needs Node >= 24.9; $NODE is $NODE_VERSION"
 fi
 
-# -- installed package -----------------------------------------------------
-NPM_PREFIX=$(PATH="$NODE_BIN:$PATH" "$NPM" prefix -g 2>/dev/null | tail -1 || true)
-[ -n "$NPM_PREFIX" ] || die "could not read the npm global prefix"
-NODE_PREFIX=$(CDPATH= cd -- "$NODE_BIN/.." && pwd -P)
-NPM_PREFIX=$(CDPATH= cd -- "$NPM_PREFIX" 2>/dev/null && pwd -P || printf '%s' "$NPM_PREFIX")
-[ "$NPM_PREFIX" = "$NODE_PREFIX" ] \
-  || die "npm installs into $NPM_PREFIX but dsh runs from $NODE_PREFIX; align npm's prefix first"
-
-PKG="$NODE_PREFIX/lib/node_modules/@deepseek-ai/dsh"
-[ -f "$PKG/package.json" ] || die "missing $PKG/package.json; update dsh manually"
-CURRENT=$("$NODE" -p 'require(process.argv[1]).version' "$PKG/package.json" 2>/dev/null || true)
-[ -n "$CURRENT" ] || die "could not read the installed dsh version from $PKG/package.json"
-
 if [ -n "$VERSION" ]; then
   SPEC="@deepseek-ai/dsh@$VERSION"
 elif [ -n "$TAG" ]; then
@@ -158,12 +148,113 @@ elif [ -n "$TAG" ]; then
 else
   SPEC="@deepseek-ai/dsh@latest"
 fi
-RESOLVED=$(PATH="$NODE_BIN:$PATH" "$NPM" view "$SPEC" version 2>/dev/null | tail -1 || true)
+
+# The package that serves the unit is authoritative, not the npm prefix: pnpm
+# keeps its global packages under its own root, and a service may run a Node
+# that did not install it. Resolve the running entry first, then the dsh
+# launcher, then each global root.
+package_root() {
+  file=$1
+  [ -n "$file" ] || return 1
+  dir=$(CDPATH= cd -- "$(dirname -- "$file")" 2>/dev/null && pwd -P) || return 1
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/package.json" ]; then
+      name=$(sed -n 's/^[[:space:]]*"name":[[:space:]]*"\([^"]*\)".*/\1/p' "$dir/package.json" 2>/dev/null | head -1)
+      if [ "$name" = "@deepseek-ai/dsh" ]; then
+        printf '%s' "$dir"
+        return 0
+      fi
+    fi
+    dir=$(dirname "$dir")
+  done
+  return 1
+}
+
+PKG=""
+if [ -n "$PID" ] && [ -r "/proc/$PID/cmdline" ]; then
+  ENTRY=$(tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | sed -n '2p')
+  case "$ENTRY" in
+    /*) PKG=$(package_root "$ENTRY" || true) ;;
+  esac
+fi
+if [ -z "$PKG" ]; then
+  DSH_BIN=$(command -v dsh 2>/dev/null || true)
+  if [ -n "$DSH_BIN" ]; then
+    REAL=$(readlink -f "$DSH_BIN" 2>/dev/null || true)
+    case "$REAL" in
+      /*) PKG=$(package_root "$REAL" || true) ;;
+    esac
+  fi
+fi
+
+NPM_PREFIX=""
+if [ -x "$NODE_BIN/npm" ]; then
+  NPM_PREFIX=$(PATH="$NODE_BIN:$PATH" "$NODE_BIN/npm" prefix -g 2>/dev/null | tail -1 || true)
+fi
+if [ -z "$PKG" ] && [ -n "$NPM_PREFIX" ]; then
+  CAND=$(CDPATH= cd -- "$NPM_PREFIX/lib/node_modules/@deepseek-ai/dsh" 2>/dev/null && pwd -P || true)
+  if [ -n "$CAND" ] && [ -f "$CAND/package.json" ]; then PKG=$CAND; fi
+fi
+
+PNPM=""
+PNPM_ROOT=""
+if command -v pnpm >/dev/null 2>&1; then
+  PNPM=$(command -v pnpm)
+  PNPM_ROOT=$(PATH="$NODE_BIN:$PATH" "$PNPM" root -g 2>/dev/null | tail -1 || true)
+fi
+if [ -z "$PKG" ] && [ -n "$PNPM_ROOT" ]; then
+  CAND=$(CDPATH= cd -- "$PNPM_ROOT/@deepseek-ai/dsh" 2>/dev/null && pwd -P || true)
+  if [ -n "$CAND" ] && [ -f "$CAND/package.json" ]; then PKG=$CAND; fi
+fi
+
+if [ -z "$PKG" ]; then
+  say "   node:     $NODE_VERSION ($NODE_BIN)"
+  [ -n "$NPM_PREFIX" ] && say "   npm root: $NPM_PREFIX"
+  [ -n "$PNPM_ROOT" ] && say "   pnpm root: $PNPM_ROOT"
+  DSH_BIN=$(command -v dsh 2>/dev/null || true)
+  [ -n "$DSH_BIN" ] && say "   dsh:      $DSH_BIN"
+  die "could not identify the installed @deepseek-ai/dsh; install manually with 'npm install -g $SPEC' or 'pnpm add -g $SPEC'"
+fi
+
+CURRENT=$("$NODE" -p 'require(process.argv[1]).version' "$PKG/package.json" 2>/dev/null || true)
+[ -n "$CURRENT" ] || die "could not read the installed dsh version from $PKG/package.json"
+
+PKG_REAL=$(CDPATH= cd -- "$PKG" && pwd -P)
+INSTALLER=""
+INSTALL_ROOT=""
+if [ -n "$NPM_PREFIX" ]; then
+  NPM_PREFIX_REAL=$(CDPATH= cd -- "$NPM_PREFIX" 2>/dev/null && pwd -P || printf '%s' "$NPM_PREFIX")
+  case "$PKG_REAL" in
+    "$NPM_PREFIX_REAL"/*) INSTALLER=npm; INSTALL_ROOT=$NPM_PREFIX_REAL ;;
+  esac
+fi
+if [ -z "$INSTALLER" ] && [ -n "$PNPM_ROOT" ]; then
+  PNPM_ROOT_REAL=$(CDPATH= cd -- "$PNPM_ROOT" 2>/dev/null && pwd -P || printf '%s' "$PNPM_ROOT")
+  case "$PKG_REAL" in
+    "$PNPM_ROOT_REAL"/*) INSTALLER=pnpm; INSTALL_ROOT=$PNPM_ROOT_REAL ;;
+  esac
+fi
+if [ -z "$INSTALLER" ]; then
+  say "   package:  $PKG"
+  [ -n "$NPM_PREFIX" ] && say "   npm root: $NPM_PREFIX"
+  [ -n "$PNPM_ROOT" ] && say "   pnpm root: $PNPM_ROOT"
+  die "cannot tell how $PKG was installed; update manually with 'npm install -g $SPEC' or 'pnpm add -g $SPEC', then restart $UNIT"
+fi
+if [ "$INSTALLER" = npm ] && [ -x "$NPM" ]; then
+  RESOLVED=$(PATH="$NODE_BIN:$PATH" "$NPM" view "$SPEC" version 2>/dev/null | tail -1 || true)
+elif [ -n "$PNPM" ]; then
+  RESOLVED=$(PATH="$NODE_BIN:$PATH" "$PNPM" view "$SPEC" version 2>/dev/null | tail -1 || true)
+elif [ -x "$NPM" ]; then
+  RESOLVED=$(PATH="$NODE_BIN:$PATH" "$NPM" view "$SPEC" version 2>/dev/null | tail -1 || true)
+else
+  RESOLVED=""
+fi
 [ -n "$RESOLVED" ] || die "cannot resolve $SPEC on the remote registry"
 
-say "   dsh:     $CURRENT ($PKG)"
-say "   node:    $NODE_VERSION ($NODE_BIN)"
-say "   target:  $RESOLVED ($SPEC)"
+say "   dsh:       $CURRENT ($PKG)"
+say "   node:      $NODE_VERSION ($NODE_BIN)"
+say "   installer: $INSTALLER ($INSTALL_ROOT)"
+say "   target:    $RESOLVED ($SPEC)"
 
 if [ "$RESOLVED" = "$CURRENT" ]; then
   say "   already at $CURRENT; nothing to do"
@@ -171,22 +262,36 @@ if [ "$RESOLVED" = "$CURRENT" ]; then
 fi
 
 if [ "$DRY" = 1 ]; then
-  say "   [dry-run] would run: npm install -g $SPEC"
+  if [ "$INSTALLER" = npm ]; then
+    say "   [dry-run] would run: npm install -g $SPEC"
+  else
+    say "   [dry-run] would run: pnpm add -g $SPEC"
+  fi
   [ "$RESTART" = 1 ] && say "   [dry-run] would restart dsh-web"
   exit 0
 fi
 
 # -- update ----------------------------------------------------------------
-# npm 11 refuses lifecycle scripts unless they are allow-listed. The same
-# packages the provisioning script allowed keep node-pty and friends working.
-ALLOW=""
-if PATH="$NODE_BIN:$PATH" "$NPM" install --help 2>/dev/null | grep -q -- '--allow-scripts'; then
-  ALLOW="--allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs"
+if [ "$INSTALLER" = npm ]; then
+  # npm 11 refuses lifecycle scripts unless they are allow-listed. The same
+  # packages the provisioning script allowed keep node-pty and friends working.
+  ALLOW=""
+  if PATH="$NODE_BIN:$PATH" "$NPM" install --help 2>/dev/null | grep -q -- '--allow-scripts'; then
+    ALLOW="--allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs"
+  fi
+  say "   installing $SPEC with npm (this can take a few minutes)"
+  PATH="$NODE_BIN:$PATH" "$NPM" install -g --no-audit --no-fund --loglevel=warn $ALLOW "$SPEC" \
+    || die "npm install failed; dsh may need a manual reinstall"
+else
+  # pnpm 10 gates lifecycle scripts the same way; pnpm 9 has no such flag.
+  ALLOW=""
+  if PATH="$NODE_BIN:$PATH" "$PNPM" add --help 2>/dev/null | grep -q -- '--allow-build'; then
+    ALLOW="--allow-build=@deepseek-ai/dsh-subprocess-local --allow-build=koffi --allow-build=node-pty --allow-build=@google/genai --allow-build=protobufjs"
+  fi
+  say "   installing $SPEC with pnpm (this can take a few minutes)"
+  PATH="$NODE_BIN:$PATH" "$PNPM" add -g $ALLOW "$SPEC" \
+    || die "pnpm add failed; dsh may need a manual reinstall"
 fi
-
-say "   installing $SPEC (this can take a few minutes)"
-PATH="$NODE_BIN:$PATH" "$NPM" install -g --no-audit --no-fund --loglevel=warn $ALLOW "$SPEC" \
-  || die "npm install failed; dsh may need a manual reinstall"
 INSTALLED=$("$NODE" -p 'require(process.argv[1]).version' "$PKG/package.json" 2>/dev/null || true)
 [ "$INSTALLED" = "$RESOLVED" ] || die "installed a different version than $RESOLVED"
 say "   installed: $INSTALLED"

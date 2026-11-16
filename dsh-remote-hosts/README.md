@@ -243,12 +243,13 @@ Alpine/musl or glibc older than 2.28 fails with an explicit message instead of a
 broken runtime. When nodejs.org is unreachable the download retries the same
 file from npmmirror and still verifies the official checksum.
 
-`update.sh` discovers the remote toolchain instead of assuming one: the service
-names the Node that serves it, that Node's prefix owns the global
-`@deepseek-ai/dsh` package, and the package's own npm replaces it in place. It
-only installs and restarts when the target differs from what is installed. The
-host needs Node >= 24.9 and a global npm install; anything else fails with the
-discovered paths instead of guessing.
+`update.sh` discovers the remote install instead of assuming npm: the running
+service names the Node, the dsh entry names the package root, and the global
+root that owns that package (npm or pnpm) chooses the upgrade command. It only
+installs and restarts when the target differs from what is installed. An
+unknown layout prints the discovered Node, npm and pnpm roots plus the manual
+`npm install -g` / `pnpm add -g` command instead of guessing. The host needs
+Node >= 24.9.
 
 Restarting a service drops the login token the local proxy cached. The next
 frame request gets a 401, the proxy logs in again with the token the restarted
