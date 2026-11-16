@@ -857,7 +857,16 @@ window.__ModuleLoader__.load({
         const logRef = React.useRef(null);
         const abortRef = React.useRef(null);
         const menuRef = React.useRef(null);
+        const menuOpenRef = React.useRef(false);
         const lastToggle = React.useRef(0);
+
+        // The global keydown listener is bound once per host and would otherwise
+        // read the menu flag from the render that opened the host. Keep the state
+        // and its ref in step so Escape sees the menu that is open right now.
+        const setMenu = (open) => {
+          menuOpenRef.current = open;
+          setMenuOpen(open);
+        };
 
         React.useEffect(() => {
           const box = logRef.current;
@@ -874,7 +883,7 @@ window.__ModuleLoader__.load({
           if (!menuOpen) return undefined;
           const close = (event) => {
             if (menuRef.current && menuRef.current.contains(event.target)) return;
-            setMenuOpen(false);
+            setMenu(false);
           };
           document.addEventListener('mousedown', close, true);
           return () => document.removeEventListener('mousedown', close, true);
@@ -1112,7 +1121,18 @@ window.__ModuleLoader__.load({
           if (!active) return undefined;
           // The remote page lives in a cross-origin iframe, so this only fires
           // while focus is still in the outer shell.
-          const onKey = (event) => { if (event.key === 'Escape') backToLocal(); };
+          const onKey = (event) => {
+            if (event.key !== 'Escape') return;
+            // An open actions menu owns Escape: close the menu and stay on the
+            // remote page instead of jumping back from under the menu.
+            if (menuOpenRef.current) {
+              event.preventDefault();
+              event.stopPropagation();
+              setMenu(false);
+              return;
+            }
+            backToLocal();
+          };
           // A click on our own sidebar row toggles back: the shell re-selects the
           // panel during the same gesture, so switch back after it ran.
           const onRowClick = (event) => {
@@ -1162,7 +1182,7 @@ window.__ModuleLoader__.load({
           const cached = s.status[active.id] && s.status[active.id].probe;
           if (cached && cached.at && Date.now() - cached.at < 60000) setProbe({ id: active.id, ...cached });
           else readProbe(active, false).catch(() => {});
-          setMenuOpen(false);
+          setMenu(false);
         }, [activeId]);
 
         const entryFor = (server) => s.status[server.id] || null;
@@ -1213,7 +1233,7 @@ window.__ModuleLoader__.load({
         const serviceActive = serviceKnown && probeInfo.service.active === true;
         const menuItem = (label, run, off) => h('button', {
           key: label, type: 'button', role: 'menuitem', disabled: off === true,
-          onClick: () => { setMenuOpen(false); if (off !== true) run(); },
+          onClick: () => { setMenu(false); if (off !== true) run(); },
           style: {
             textAlign: 'left', cursor: off === true ? 'default' : 'pointer', border: 0,
             borderRadius: '6px', padding: '6px 10px', background: 'transparent',
@@ -1304,7 +1324,7 @@ window.__ModuleLoader__.load({
               h('button', {
                 type: 'button',
                 disabled: !active,
-                onClick: () => setMenuOpen((open) => !open),
+                onClick: () => setMenu(!menuOpenRef.current),
                 title: translate('more'),
                 'aria-label': translate('more'),
                 'aria-haspopup': 'menu',

@@ -26,6 +26,18 @@ test('EN and ZH expose the same keys', () => {
   for (const key of zh) assert.ok(en.has(key), 'EN is missing ' + key);
 });
 
+test('Escape closes the actions menu before leaving the remote view', () => {
+  const start = source.indexOf('const onKey = (event) =>');
+  assert.ok(start > 0, 'the remote view has a key handler');
+  const end = source.indexOf('window.addEventListener', start);
+  assert.ok(end > start, 'the key handler ends before the listeners are bound');
+  const body = source.slice(start, end);
+  const guard = body.indexOf('menuOpenRef.current');
+  const back = body.indexOf('backToLocal()');
+  assert.ok(guard > 0, 'the handler checks whether the menu is open');
+  assert.ok(back > guard, 'the menu check runs before backToLocal');
+});
+
 test('every literal translate() key is defined', () => {
   const en = dictionary('EN');
   const used = new Set();

@@ -23,8 +23,9 @@ instances is managed.
 - Remote state (tunnel + proxy) shows *connecting / online / offline*; the
   actions menu reports the remote dsh version and service state once checked.
 - Clicking the active sidebar row again or pressing Escape returns to the
-  conversation. ⌘/Ctrl+1…9 switches hosts. The browser half remembers the host
-  that was on screen and reopens it after a reload, until you go back.
+  conversation; Escape first closes the actions menu when it is open. ⌘/Ctrl+1…9
+  switches hosts. The browser half remembers the host that was on screen and
+  reopens it after a reload, until you go back.
 - An empty server list renders no rows; add one in the plugin settings.
 
 ## Connections
