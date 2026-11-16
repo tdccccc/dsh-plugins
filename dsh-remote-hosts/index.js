@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Schema from '@deepseek-ai/schemastery';
 import { Tunnel } from './lib/tunnel.js';
@@ -13,7 +15,11 @@ export const name = 'dsh-remote-hosts';
 export const inject = ['connection'];
 
 const SCRIPT = fileURLToPath(new URL('./bin/sync.sh', import.meta.url));
+const UPDATE_SCRIPT = fileURLToPath(new URL('./bin/update.sh', import.meta.url));
 const SYNC_TIMEOUT_MS = 300000;
+// An update downloads the whole package tree and restarts the unit, so it gets
+// a longer leash than a settings copy.
+const UPDATE_TIMEOUT_MS = 900000;
 const TAIL_LINES = 40;
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/i;
 
@@ -130,6 +136,23 @@ function configuredServers(config) {
   return servers.length ? servers : DEFAULT_SERVERS.map((server) => ({ ...server }));
 }
 
+// The Host half runs inside the dsh process that owns this machine's profile,
+// so the package next to argv[1] names the version this app runs: the desktop
+// host publishes the app version and the CLI publishes the dsh version. An
+// unknown process shape only loses the "same version" default for updates.
+function localDshVersion() {
+  const entry = process.argv[1];
+  if (!entry) return '';
+  const folder = dirname(entry);
+  for (const file of [join(folder, '..', 'package.json'), join(folder, 'package.json')]) {
+    try {
+      const meta = JSON.parse(readFileSync(file, 'utf8'));
+      if (/^@deepseek-ai\/dsh\b/.test(String(meta.name)) && typeof meta.version === 'string') return meta.version;
+    } catch {}
+  }
+  return '';
+}
+
 function tail(text, count) {
   return String(text || '').trim().split('\n').filter((line) => line.trim()).slice(-count).join('\n');
 }
@@ -176,7 +199,7 @@ function readLines(stream, onLine) {
 // Answer with newline-delimited JSON so the browser can show progress while the
 // copy runs: one line event per line of output, then one done event carrying
 // the same readable summary a single-shot answer used to carry.
-function streamSync(request, args) {
+function streamSync(request, args, timeoutMs = SYNC_TIMEOUT_MS) {
   let child;
   try {
     child = spawn('sh', args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -203,7 +226,7 @@ function streamSync(request, args) {
   readLines(child.stdout, (text) => line('stdout', stdoutTail, text));
   readLines(child.stderr, (text) => line('stderr', stderrTail, text));
 
-  const timeout = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, SYNC_TIMEOUT_MS);
+  const timeout = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs);
   timeout.unref?.();
   const stop = () => { try { child.kill('SIGKILL'); } catch {} };
   if (request.signal) {
@@ -399,7 +422,7 @@ export function apply(ctx, config) {
     path: '/api/remote-hosts/status',
     methods: ['GET'],
     requestBody: 'buffered',
-    fetch: () => Promise.resolve(jsonResponse({ ok: true, servers: describe() })),
+    fetch: () => Promise.resolve(jsonResponse({ ok: true, localVersion: localDshVersion(), servers: describe() })),
   }), 'remote-hosts: status route');
 
   ctx.effect(() => ctx.connection.fetch.register({
@@ -438,4 +461,28 @@ export function apply(ctx, config) {
       return streamSync(request, args);
     },
   }), 'remote-hosts: sync route');
+
+  ctx.effect(() => ctx.connection.fetch.register({
+    path: '/api/remote-hosts/update',
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      const payload = await readJson(request);
+      if (!payload) return jsonResponse({ ok: false, error: 'bad json' }, 400);
+      const host = String(payload.host || '');
+      const server = configuredServers(config).find((entry) => entry.id === host);
+      if (!server) return jsonResponse({ ok: false, error: 'unknown host: ' + host }, 400);
+      // Updating needs ssh; a URL-only host is somebody else's install.
+      if (!server.sshHost) return jsonResponse({ ok: false, error: 'host is not managed by this plugin: ' + host }, 400);
+
+      const args = [UPDATE_SCRIPT, server.sshHost, '--port', String(server.remotePort)];
+      // A desktop host cannot be updated against a version it does not run.
+      const version = localDshVersion();
+      if (version) args.push('--version', version);
+      else args.push('--tag', 'latest');
+      if (payload.dryRun === true) args.push('--dry-run');
+      else if (payload.restart === false) args.push('--no-restart');
+      return streamSync(request, args, UPDATE_TIMEOUT_MS);
+    },
+  }), 'remote-hosts: update route');
 }

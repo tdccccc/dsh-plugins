@@ -13,6 +13,7 @@ window.__ModuleLoader__.load({
     // session there, which the plain web server does not.
     const STATUS_ROUTE = '/api/remote-hosts/status';
     const SYNC_ROUTE = '/api/remote-hosts/sync';
+    const UPDATE_ROUTE = '/api/remote-hosts/update';
     const RECONNECT_ROUTE = '/api/remote-hosts/reconnect';
     const LAST_HOST_KEY = 'dsh-remote-hosts:last-host';
     const OPEN_KEY = 'dsh-remote-hosts:open';
@@ -58,6 +59,14 @@ window.__ModuleLoader__.load({
       switchTitle: 'Switch to this host (⌘/Ctrl+{n})',
       shortcutSwitch: 'Switch to remote host {n}',
       confirmRestart: 'Sync settings to {host} and restart the remote dsh-web?\n\nRestarting interrupts sessions running on the remote.',
+      update: 'Update dsh',
+      updateTitle: 'Install this app\'s dsh version on the host and restart the remote dsh-web',
+      updating: 'Updating dsh…',
+      updateFailed: 'Update failed: {detail}',
+      updated: 'dsh on {host} is now {version}',
+      updatedLatest: 'dsh on {host} is up to date',
+      confirmUpdate: 'Update dsh on {host}{to} and restart the remote dsh-web?\n\nThe update downloads packages and restarts the service, interrupting sessions running on the remote.',
+      toVersion: ' to {version}',
       summary: 'Remote servers shown in the sidebar.',
       intro: 'Servers shown in the sidebar. The same list authorizes the sync route, so keep ids stable.',
       id: 'ID',
@@ -116,6 +125,14 @@ window.__ModuleLoader__.load({
       switchTitle: '切换到此主机（⌘/Ctrl+{n}）',
       shortcutSwitch: '切换到远程主机 {n}',
       confirmRestart: '同步配置到 {host} 并重启远端 dsh-web？\n\n重启会中断远端正在运行的会话。',
+      update: '更新 dsh',
+      updateTitle: '把本机应用使用的 dsh 版本装到该主机，并重启远端 dsh-web',
+      updating: '更新 dsh 中…',
+      updateFailed: '更新失败：{detail}',
+      updated: '{host} 上的 dsh 已是 {version}',
+      updatedLatest: '{host} 上的 dsh 已是最新版本',
+      confirmUpdate: '更新 {host} 上的 dsh{to} 并重启远端 dsh-web？\n\n更新会下载依赖并重启服务，中断远端正在运行的会话。',
+      toVersion: ' 到 {version}',
       summary: '侧边栏中的远程服务器。',
       intro: '显示在侧边栏的服务器。同一份列表也决定同步接口允许的主机，请保持 id 稳定。',
       id: 'ID',
@@ -208,6 +225,10 @@ window.__ModuleLoader__.load({
       reload: {},
       inset: 280,
       servers: normalizeServers(FALLBACK_SERVERS),
+      // Version of the desktop app's own dsh, sent by the Host half; the update
+      // confirmation names it, and an empty value means the host falls back to
+      // the latest published release.
+      localVersion: '',
       // id -> { managed, state, error, proxyUrl, updatedAt }; kept apart from the
       // server rows so a state poll never re-registers the sidebar slots.
       status: {},
@@ -531,13 +552,11 @@ window.__ModuleLoader__.load({
           if (abortRef.current) abortRef.current.abort();
         }, []);
 
-        const sync = async (server, options) => {
-          const restart = options.restart === true;
-          const dryRun = options.dryRun === true;
-          // Restarting drops whatever the remote is running; ask first.
-          if (restart && typeof window.confirm === 'function'
-            && !window.confirm(translate('confirmRestart', { host: server.label }))) return;
+        const flat = (value) => String(value || '').trim().split('\n').filter((line) => line.trim()).slice(-3).join(' / ');
 
+        // The Host streams one NDJSON event per line of output, then a done
+        // event carrying the same readable summary a single answer used to.
+        const streamAction = async (route, body, controller) => {
           const recent = { stdout: [], stderr: [] };
           const appendLog = (stream, text) => {
             const name = stream === 'stderr' ? 'stderr' : 'stdout';
@@ -548,7 +567,6 @@ window.__ModuleLoader__.load({
               lines: (prev.lines.length >= 400 ? prev.lines.slice(-399) : prev.lines).concat([{ stream: name, text }]),
             }));
           };
-          // The host streams one NDJSON event per line of output, then a done event.
           const consume = (text) => {
             let event;
             try { event = JSON.parse(text); } catch { return null; }
@@ -557,77 +575,119 @@ window.__ModuleLoader__.load({
             return event.type === 'done' ? event : null;
           };
           const tailOf = (stream) => recent[stream].join('\n');
-          const flat = (value) => String(value || '').trim().split('\n').filter((line) => line.trim()).slice(-3).join(' / ');
 
           setLog({ open: true, lines: [] });
-          setSyncState({
-            busy: true,
-            error: false,
-            text: dryRun ? translate('syncingPreview') : restart ? translate('syncingRestart') : translate('syncing'),
+          const response = await fetch(route, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: controller.signal,
           });
+          let done = null;
+          if (response.ok && /application\/x-ndjson/i.test(response.headers.get('content-type') || '')) {
+            if (!response.body || !response.body.getReader) throw new Error('response has no readable log stream');
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            for (;;) {
+              const chunk = await reader.read();
+              if (chunk.done) break;
+              buffer += decoder.decode(chunk.value, { stream: true });
+              let index;
+              while ((index = buffer.indexOf('\n')) !== -1) {
+                const line = buffer.slice(0, index);
+                buffer = buffer.slice(index + 1);
+                if (line.trim()) done = consume(line) || done;
+              }
+            }
+            buffer += decoder.decode();
+            if (buffer.trim()) done = consume(buffer) || done;
+          } else {
+            // Policy refusals and older hosts answer with one JSON document.
+            const payload = await response.json().catch(() => ({}));
+            for (const stream of ['stdout', 'stderr']) {
+              const text = String(payload[stream] || '');
+              if (text) text.trimEnd().split('\n').forEach((value) => appendLog(stream, value));
+            }
+            done = {
+              ok: response.ok && payload.ok === true,
+              code: payload.code,
+              error: payload.error || payload.stderr || payload.stdout || '',
+            };
+          }
+          if (!done || !response.ok || !done.ok) {
+            return {
+              ok: false,
+              detail: flat((done && done.error) || tailOf('stderr') || tailOf('stdout') || translate('httpStatus', { status: response.status })),
+            };
+          }
+          return { ok: true };
+        };
+
+        // Shared busy state and abort wiring; the caller writes the success
+        // text and decides what to reload afterwards.
+        const runAction = async (route, body, pending, failure, success) => {
+          setSyncState({ busy: true, error: false, text: pending });
           const controller = new AbortController();
           abortRef.current = controller;
           try {
-            const response = await fetch(SYNC_ROUTE, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ host: server.id, restart, dryRun }),
-              signal: controller.signal,
-            });
-            let done = null;
-            if (response.ok && /application\/x-ndjson/i.test(response.headers.get('content-type') || '')) {
-              if (!response.body || !response.body.getReader) throw new Error('response has no readable log stream');
-              const reader = response.body.getReader();
-              const decoder = new TextDecoder();
-              let buffer = '';
-              for (;;) {
-                const chunk = await reader.read();
-                if (chunk.done) break;
-                buffer += decoder.decode(chunk.value, { stream: true });
-                let index;
-                while ((index = buffer.indexOf('\n')) !== -1) {
-                  const line = buffer.slice(0, index);
-                  buffer = buffer.slice(index + 1);
-                  if (line.trim()) done = consume(line) || done;
-                }
-              }
-              buffer += decoder.decode();
-              if (buffer.trim()) done = consume(buffer) || done;
-            } else {
-              // Policy refusals and older hosts answer with one JSON document.
-              const payload = await response.json().catch(() => ({}));
-              for (const stream of ['stdout', 'stderr']) {
-                const text = String(payload[stream] || '');
-                if (text) text.trimEnd().split('\n').forEach((value) => appendLog(stream, value));
-              }
-              done = {
-                ok: response.ok && payload.ok === true,
-                code: payload.code,
-                error: payload.error || payload.stderr || payload.stdout || '',
-              };
-            }
-            if (!done || !response.ok || !done.ok) {
-              const detail = flat((done && done.error) || tailOf('stderr') || tailOf('stdout') || translate('httpStatus', { status: response.status }));
-              setSyncState({ busy: false, error: true, text: translate('syncFailed', { detail }) });
-              return;
-            }
+            const result = await streamAction(route, body, controller);
             setSyncState({
               busy: false,
-              error: false,
-              text: dryRun
-                ? translate('previewDone')
-                : restart
-                  ? translate('synced', { host: server.label })
-                  : translate('syncedNoRestart', { host: server.label }),
+              error: !result.ok,
+              text: result.ok ? success : translate(failure, { detail: result.detail }),
             });
-            if (restart && !dryRun) reload(server.id);
-            pollStatus().catch(() => {});
+            return result.ok;
           } catch (err) {
-            if (controller.signal.aborted) return;
-            setSyncState({ busy: false, error: true, text: translate('syncFailed', { detail: flat(err && err.message ? err.message : String(err)) }) });
+            if (controller.signal.aborted) return false;
+            setSyncState({ busy: false, error: true, text: translate(failure, { detail: flat(err && err.message ? err.message : String(err)) }) });
+            return false;
           } finally {
             if (abortRef.current === controller) abortRef.current = null;
           }
+        };
+
+        const sync = async (server, options) => {
+          const restart = options.restart === true;
+          const dryRun = options.dryRun === true;
+          // Restarting drops whatever the remote is running; ask first.
+          if (restart && typeof window.confirm === 'function'
+            && !window.confirm(translate('confirmRestart', { host: server.label }))) return;
+          const ok = await runAction(
+            SYNC_ROUTE,
+            { host: server.id, restart, dryRun },
+            dryRun ? translate('syncingPreview') : restart ? translate('syncingRestart') : translate('syncing'),
+            'syncFailed',
+            dryRun
+              ? translate('previewDone')
+              : restart
+                ? translate('synced', { host: server.label })
+                : translate('syncedNoRestart', { host: server.label }),
+          );
+          if (!ok) return;
+          if (restart && !dryRun) reload(server.id);
+          pollStatus().catch(() => {});
+        };
+
+        // Install this app's dsh version on the host. The script restarts the
+        // remote unit and waits for it to answer, so the frame can reload at
+        // once; the proxy re-reads the new launch token on the first 401.
+        const update = async (server) => {
+          const to = s.localVersion ? translate('toVersion', { version: s.localVersion }) : '';
+          if (typeof window.confirm === 'function'
+            && !window.confirm(translate('confirmUpdate', { host: server.label, to }))) return;
+          const ok = await runAction(
+            UPDATE_ROUTE,
+            { host: server.id, restart: true },
+            translate('updating'),
+            'updateFailed',
+            s.localVersion
+              ? translate('updated', { host: server.label, version: s.localVersion })
+              : translate('updatedLatest', { host: server.label }),
+          );
+          if (!ok) return;
+          reload(server.id);
+          pollStatus().catch(() => {});
         };
 
         const retry = async (server) => {
@@ -726,6 +786,8 @@ window.__ModuleLoader__.load({
           color: 'inherit', opacity: off ? 0.4 : 0.7,
         });
         const disabled = syncState.busy || !active;
+        // Only a host this plugin owns has an ssh target to update.
+        const managed = !!(active && (active.managed === true || (entryFor(active) && entryFor(active).managed === true)));
 
         return h('div', {
           style: {
@@ -807,6 +869,15 @@ window.__ModuleLoader__.load({
               title: translate('syncPreview'),
               style: barStyle(disabled),
             }, translate('syncPreview')),
+            managed
+              ? h('button', {
+                type: 'button',
+                disabled: syncState.busy,
+                onClick: () => active && update(active),
+                title: translate('updateTitle'),
+                style: barStyle(syncState.busy),
+              }, translate('update'))
+              : null,
             syncState.text
               ? h('span', {
                 style: { fontSize: '12px', opacity: 0.7, color: syncState.error ? 'var(--dsw-alias-state-error-primary, #d9534f)' : 'inherit' },
@@ -954,7 +1025,7 @@ window.__ModuleLoader__.load({
         });
       };
 
-      const setStatus = (rows) => {
+      const setStatus = (rows, localVersion) => {
         const next = {};
         for (const row of Array.isArray(rows) ? rows : []) {
           if (!row || typeof row.id !== 'string') continue;
@@ -966,7 +1037,8 @@ window.__ModuleLoader__.load({
             updatedAt: Number(row.updatedAt) || 0,
           };
         }
-        setState({ ...state, status: next });
+        const version = typeof localVersion === 'string' ? localVersion : state.localVersion;
+        setState({ ...state, status: next, localVersion: version });
       };
 
       const setServers = (input) => {
@@ -993,7 +1065,7 @@ window.__ModuleLoader__.load({
         const rows = payload && Array.isArray(payload.servers) ? payload.servers : null;
         if (!rows) throw new Error('unexpected status payload');
         setServers(rows);
-        setStatus(rows);
+        setStatus(rows, payload && payload.localVersion);
       };
 
       // The fallback rows are installed synchronously so the sidebar never waits
