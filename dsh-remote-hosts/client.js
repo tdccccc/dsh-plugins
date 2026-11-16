@@ -23,6 +23,9 @@ window.__ModuleLoader__.load({
     // The Host refuses a restart/stop while the remote wrote session files in
     // its window; the browser turns that code into a second confirmation.
     const ACTIVE_SESSION_CODE = 'active-sessions';
+    // A second sync/update/service/provision on the same host is refused while
+    // the first one runs; another window is the usual source.
+    const ACTION_IN_PROGRESS = 'action-in-progress';
     const LAST_HOST_KEY = 'dsh-remote-hosts:last-host';
     const OPEN_KEY = 'dsh-remote-hosts:open';
     const readStore = (key) => { try { return window.localStorage.getItem(key); } catch { return null; } };
@@ -113,6 +116,7 @@ window.__ModuleLoader__.load({
       confirmActiveSessions: '{host} has {count} remote session(s) active in the last {minutes} minutes.{ids}\n\nContinuing interrupts them. Run anyway?',
       activeSessionsIds: '\n\nSessions: {ids}',
       activeSessionsBlocked: 'Stopped: {host} has {count} active remote session(s), nothing was changed.',
+      actionInProgress: 'Another action is already running on {host}.',
       restartingService: 'Restarting remote service…',
       serviceFailed: 'Service action failed: {detail}',
       serviceDone: 'Remote service on {host} restarted',
@@ -279,6 +283,7 @@ window.__ModuleLoader__.load({
       confirmActiveSessions: '{host} 最近 {minutes} 分钟内有 {count} 个活跃会话。{ids}\n\n继续会中断这些会话，仍要执行吗？',
       activeSessionsIds: '\n\n会话：{ids}',
       activeSessionsBlocked: '已停止：{host} 还有 {count} 个活跃会话，未做任何改动。',
+      actionInProgress: '{host} 上已有操作在进行中。',
       restartingService: '重启远端服务中…',
       serviceFailed: '服务操作失败：{detail}',
       serviceDone: '{host} 上的远端服务已重启',
@@ -1431,6 +1436,10 @@ window.__ModuleLoader__.load({
         // so the default path stays one click when the remote is idle.
         const runGuarded = async (server, route, body, pending, failure, success) => {
           const first = await runAction(route, body, pending, failure, success);
+          if (first.code === ACTION_IN_PROGRESS) {
+            setSyncState({ busy: false, error: false, text: translate('actionInProgress', { host: server.label }) });
+            return first;
+          }
           if (first.ok || first.code !== ACTIVE_SESSION_CODE) return first;
           const sessions = first.sessions || {};
           const count = Number(sessions.active) || 0;

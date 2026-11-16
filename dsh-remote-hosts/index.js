@@ -205,7 +205,17 @@ function readLines(stream, onLine) {
 // Answer with newline-delimited JSON so the browser can show progress while the
 // copy runs: one line event per line of output, then one done event carrying
 // the same readable summary a single-shot answer used to carry.
-function streamCommand(request, args, timeoutMs = SYNC_TIMEOUT_MS) {
+function streamCommand(request, args, timeoutMs = SYNC_TIMEOUT_MS, onDone = null) {
+  // The caller may hold a per-host action lock; release it exactly once, when
+  // the child exits, the request is aborted, or no child was started at all.
+  let released = false;
+  const finish = () => {
+    if (released) return;
+    released = true;
+    if (typeof onDone === 'function') {
+      try { onDone(); } catch {}
+    }
+  };
   let child;
   try {
     child = spawn('sh', args, {
@@ -216,6 +226,7 @@ function streamCommand(request, args, timeoutMs = SYNC_TIMEOUT_MS) {
       detached: process.platform !== 'win32',
     });
   } catch (error) {
+    finish();
     return jsonResponse({ ok: false, error: 'could not run the sync script: ' + (error && error.message ? error.message : String(error)) }, 500);
   }
 
@@ -255,9 +266,9 @@ function streamCommand(request, args, timeoutMs = SYNC_TIMEOUT_MS) {
     else request.signal.addEventListener('abort', stop, { once: true });
   }
 
-  child.on('error', (error) => { spawnError = error; });
+  child.on('error', (error) => { finish(); spawnError = error; });
   child.on('close', (code, signal) => {
-    if (finished) return;
+    if (finished) { finish(); return; }
     finished = true;
     clearTimeout(timeout);
     const ok = !spawnError && !timedOut && !signal && code === 0;
@@ -269,11 +280,12 @@ function streamCommand(request, args, timeoutMs = SYNC_TIMEOUT_MS) {
       error: ok ? '' : describeFailure(failure, stdoutTail.join('\n'), stderrTail.join('\n')),
     });
     try { if (controller) controller.close(); } catch {}
+    finish();
   });
 
   return new Response(new ReadableStream({
     start(value) { controller = value; },
-    cancel() { finished = true; clearTimeout(timeout); stop(); },
+    cancel() { finished = true; clearTimeout(timeout); stop(); finish(); },
   }), {
     headers: {
       'content-type': 'application/x-ndjson; charset=utf-8',
@@ -656,6 +668,22 @@ export function apply(ctx, config) {
     return recentSessions(result.info, sessionWindowMinutes(config));
   };
 
+  // One remote-changing action per host at a time. The browser disables its own
+  // buttons, but a second window or a double request must not install or
+  // restart the same host twice.
+  const actionsInFlight = new Set();
+  const startAction = (host) => {
+    if (actionsInFlight.has(host)) return false;
+    actionsInFlight.add(host);
+    return true;
+  };
+  const actionBusy = (host) => jsonResponse({
+    ok: false,
+    code: 'action-in-progress',
+    error: 'another action is already running on ' + host,
+  }, 409);
+  const finishAction = (host) => () => { actionsInFlight.delete(host); };
+
   // The browser turns this code into the second "run anyway" confirmation and
   // resends the request with force: true.
   const interrupted = (server, sessions) => jsonResponse({
@@ -699,6 +727,7 @@ export function apply(ctx, config) {
       disposed = true;
       clearInterval(idleTimer);
       currentId = null;
+      actionsInFlight.clear();
       const current = [...links.values()];
       links.clear();
       await Promise.all(current.map((link) => link.stop()));
@@ -769,9 +798,13 @@ export function apply(ctx, config) {
       const restart = payload.restart !== false;
       const dryRun = payload.dryRun === true;
       reconcile();
+      if (!startAction(host)) return actionBusy(host);
       if (restart && !dryRun && payload.force !== true) {
         const sessions = await interruptWarning(server);
-        if (sessions) return interrupted(server, sessions);
+        if (sessions) {
+          actionsInFlight.delete(host);
+          return interrupted(server, sessions);
+        }
       }
       const args = [SCRIPT, server.sshHost || server.id];
       // A managed host carries its own service descriptor so the same script
@@ -789,7 +822,7 @@ export function apply(ctx, config) {
       // --dry-run stops before any copy or restart, so it wins over --restart.
       if (dryRun) args.push('--dry-run');
       else if (restart) args.push('--restart');
-      return streamCommand(request, args);
+      return streamCommand(request, args, SYNC_TIMEOUT_MS, finishAction(host));
     },
   }), 'remote-hosts: sync route');
 
@@ -812,9 +845,13 @@ export function apply(ctx, config) {
       }
       const dryRun = payload.dryRun === true;
       reconcile();
+      if (!startAction(host)) return actionBusy(host);
       if (!dryRun && payload.force !== true) {
         const sessions = await interruptWarning(server);
-        if (sessions) return interrupted(server, sessions);
+        if (sessions) {
+          actionsInFlight.delete(host);
+          return interrupted(server, sessions);
+        }
       }
       const args = [
         PROVISION_SCRIPT, server.sshHost,
@@ -829,7 +866,7 @@ export function apply(ctx, config) {
       if (dryRun) args.push('--dry-run');
       const link = links.get(host);
       if (link) link.clearProbe();
-      return streamCommand(request, args, PROVISION_TIMEOUT_MS);
+      return streamCommand(request, args, PROVISION_TIMEOUT_MS, finishAction(host));
     },
   }), 'remote-hosts: provision route');
 
@@ -846,9 +883,13 @@ export function apply(ctx, config) {
       // Updating needs ssh; a URL-only host is somebody else's install.
       if (!server.sshHost) return jsonResponse({ ok: false, error: 'host is not managed by this plugin: ' + host }, 400);
       reconcile();
+      if (!startAction(host)) return actionBusy(host);
       if (payload.dryRun !== true && payload.restart !== false && payload.force !== true) {
         const sessions = await interruptWarning(server);
-        if (sessions) return interrupted(server, sessions);
+        if (sessions) {
+          actionsInFlight.delete(host);
+          return interrupted(server, sessions);
+        }
       }
 
       const args = [UPDATE_SCRIPT, server.sshHost, '--port', String(server.remotePort), '--kind', server.serviceKind];
@@ -866,7 +907,7 @@ export function apply(ctx, config) {
       else if (payload.restart === false) args.push('--no-restart');
       const link = links.get(host);
       if (link) link.clearProbe();
-      return streamCommand(request, args, UPDATE_TIMEOUT_MS);
+      return streamCommand(request, args, UPDATE_TIMEOUT_MS, finishAction(host));
     },
   }), 'remote-hosts: update route');
 
@@ -912,15 +953,19 @@ export function apply(ctx, config) {
         return jsonResponse({ ok: false, error: 'host has no managed dsh service: ' + host }, 400);
       }
       reconcile();
+      if (!startAction(host)) return actionBusy(host);
       if (action !== 'start' && payload.force !== true) {
         const sessions = await interruptWarning(server);
-        if (sessions) return interrupted(server, sessions);
+        if (sessions) {
+          actionsInFlight.delete(host);
+          return interrupted(server, sessions);
+        }
       }
       const args = [REMOTE_SCRIPT, server.sshHost, 'service', action, '--port', String(server.remotePort), '--kind', server.serviceKind];
       if (server.serviceUnit) args.push('--unit', server.serviceUnit);
       const link = links.get(host);
       if (link) link.clearProbe();
-      return streamCommand(request, args, SERVICE_TIMEOUT_MS);
+      return streamCommand(request, args, SERVICE_TIMEOUT_MS, finishAction(host));
     },
   }), 'remote-hosts: service route');
 

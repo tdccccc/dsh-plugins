@@ -209,6 +209,10 @@ The overlay's actions menu and the scripts share one behavior:
   runs. Dist-tags (`latest`, `next`) are not resolved locally, so they never
   produce a badge; a newer remote (nightly while the app is stable) stays quiet.
   Nothing installs automatically.
+- **One action per host** — sync, update, service and provision take a per-host
+  lock. A double click or a second window gets `409 action-in-progress` and the
+  overlay says *another action is already running* instead of starting a
+  duplicate install or restart.
 - **Active-session guard** — before an update, a restarting sync, or a service
   restart/stop, the Host forces a fresh probe of `~/.dsh/sessions` (the top-level
   `sessionWindow`, default 10 minutes). When a session wrote a file inside that

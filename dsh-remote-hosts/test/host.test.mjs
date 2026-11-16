@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 async function setup(config) {
   const routes = new Map();
@@ -109,6 +112,38 @@ test('a managed host stays dormant until the browser activates it', async () => 
     assert.equal(payload.servers[0].update, null);
   } finally {
     await host.dispose();
+  }
+});
+
+test('a second action on the same host is refused while one runs', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-hosts-'));
+  const bin = join(dir, 'bin');
+  const home = join(dir, 'home');
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(home, { recursive: true });
+  // The guard probe runs the real payload locally; the update itself blocks so
+  // the second request arrives while the first action still owns the host.
+  writeFileSync(join(bin, 'ssh'), '#!/bin/sh\nfor last; do :; done\ncase "$last" in\n  *probe*) exec sh -c "$last" ;;\n  *) exec sleep 4 ;;\nesac\n');
+  chmodSync(join(bin, 'ssh'), 0o755);
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.HOME;
+  process.env.PATH = bin + ':' + oldPath;
+  process.env.HOME = home;
+  const host = await setup({ servers: [{ id: 'demo', label: 'Demo', sshHost: 'demo', remotePort: 27993 }] });
+  try {
+    const first = await post(host.routes.get('/api/remote-hosts/update'), { host: 'demo' });
+    assert.equal(first.status, 200);
+    assert.match(first.headers.get('content-type') || '', /x-ndjson/);
+    const second = await post(host.routes.get('/api/remote-hosts/update'), { host: 'demo' });
+    assert.equal(second.status, 409);
+    const payload = await second.json();
+    assert.equal(payload.code, 'action-in-progress');
+    await first.body.cancel().catch(() => {});
+  } finally {
+    process.env.PATH = oldPath;
+    process.env.HOME = oldHome;
+    await host.dispose();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
