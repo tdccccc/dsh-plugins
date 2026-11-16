@@ -28,9 +28,10 @@ instances is managed.
   switches hosts. The browser half remembers the host that was on screen and
   reopens it after a reload, until you go back.
 - Only the host you open gets an ssh tunnel and a proxy port. Other managed
-  hosts stay dormant with no process and no bound port; a host you leave stops
-  after `idleTimeout` (default 10 minutes, 0 disables) and reconnects the next
-  time it is opened.
+  hosts stay dormant with no process and no bound port; a host you leave closes
+  its **local** tunnel and proxy after `idleTimeout` (default 10 minutes, 0
+  disables) and reconnects the next time it is opened. The remote dsh-web
+  service and its sessions keep running.
 - An empty server list renders no rows; add one in the plugin settings.
 
 ## Connections
@@ -48,8 +49,9 @@ A tunnel is created when the browser opens the host, not when the plugin loads:
 the overlay posts to `/api/remote-hosts/activate` when a row is selected, and
 the Host starts that one link. Leaving the host releases it to the idle timer;
 the 3s status poll is the on-screen host's heartbeat, so closing the window
-also lets it go dormant. Tunnels and proxies are stopped when the plugin
-unloads.
+also lets it go dormant. This only stops the local ssh process and proxy
+listener; nothing on the remote is restarted or stopped. Tunnels and proxies
+are stopped when the plugin unloads.
 
 A row without `sshHost` is opened at its `url` as is (the old manual proxy).
 A fixed `localPort` must be unique across rows; duplicates are reported in the

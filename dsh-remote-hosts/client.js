@@ -74,7 +74,6 @@ window.__ModuleLoader__.load({
       pinTitle: 'Show in the left sidebar (saved with this host; the platform hover pin is memory-only)',
       showAll: 'Show all in sidebar',
       allShown: 'All hosts are marked for the sidebar; save to apply.',
-      pinHint: 'Sidebar visibility has two sources. The pin on each card is the sidebar setting of this plugin: it is saved with the host, applied right away and kept across restarts. A pin that appears when hovering a row in the platform sidebar belongs to the platform and lives only in memory; restarting the app puts the row back. The plugin cannot read or restore a row the platform unpinned.',
       hiddenBadge: 'hidden',
       newServer: 'New server',
       serversTitle: 'Remote servers',
@@ -205,7 +204,6 @@ window.__ModuleLoader__.load({
       pinTitle: '在左侧栏显示（随主机保存；平台悬停取消固定只存在于内存）',
       showAll: '全部显示在侧边栏',
       allShown: '已把全部主机标记为显示，保存后生效。',
-      pinHint: '侧边栏显示有两套来源：卡片上的图钉是插件的 sidebar 配置，随主机保存、立即生效并跨重启保留；平台侧边栏悬停行时的取消固定属于平台，只存在于内存中，重启应用后恢复。被平台取消固定的行，插件既读不到也无法恢复。',
       hiddenBadge: '已隐藏',
       newServer: '新服务器',
       serversTitle: '远程服务器',
@@ -799,8 +797,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'submit', className: 'rh-save', disabled: busy }, busy ? t('saving') : t('save')),
           h('button', { type: 'button', disabled: busy, onClick: discard }, t('discard'))),
         notice ? h('p', { role: failed ? 'alert' : 'status', 'data-error': failed ? 'true' : undefined }, notice) : null,
-        h('small', { className: 'rh-hint' }, t('hint')),
-        h('small', { className: 'rh-hint rh-pin-hint' }, t('pinHint')));
+        h('small', { className: 'rh-hint' }, t('hint')));
     }
 
     const SETTINGS_CSS = `
@@ -855,7 +852,6 @@ window.__ModuleLoader__.load({
 .dsh-remote-hosts-settings .rh-soft{flex:0 0 auto;padding:7px 13px;border-radius:9px;border:1px solid var(--dsw-alias-border-l1);color:inherit;background:transparent;font-weight:500;cursor:pointer}
 .dsh-remote-hosts-settings .rh-soft:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}
 .dsh-remote-hosts-settings .rh-hint{display:block;margin-top:10px;font-size:11.5px}
-.dsh-remote-hosts-settings .rh-pin-hint{margin-top:6px}
 .dsh-remote-hosts-settings [data-error=true]{color:var(--dsw-alias-state-error-primary)}
 @media(max-width:720px){.dsh-remote-hosts-settings .rh-primary-fields{grid-template-columns:1fr 1fr}.dsh-remote-hosts-settings .rh-fields{grid-template-columns:repeat(2,minmax(0,1fr))}.dsh-remote-hosts-settings .rh-head{flex-direction:column}}
 `;
