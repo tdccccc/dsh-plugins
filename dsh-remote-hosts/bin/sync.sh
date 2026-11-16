@@ -100,12 +100,24 @@ awk -v skip_id=ui-settings-account -v count_file="$TMP/skipped" '
   cat "$TMP/patch.yml"
 } > "$TMP/web-patch.yml"
 
+# Copy every provider key the local credentials file declares at the top level,
+# so a new provider does not need a sync.sh edit. Two-space keys are the flat
+# credential layout; nested 0.2 records are left to the remote app.
 KEYS=""
-for name in OPENCODE_GO_API_KEY VPS_CC_API_KEY; do
-  value=$(grep -m1 "^  $name:" "$HOME/.dsh/.credentials.yaml" 2>/dev/null | sed -E "s/^  $name: *//" || true)
-  [ -n "$value" ] && KEYS="$KEYS$name=$value
+if [ -f "$HOME/.dsh/.credentials.yaml" ]; then
+  while IFS= read -r line; do
+    name=${line%%:*}
+    name=${name#  }
+    [ -n "$name" ] || continue
+    value=${line#*:}
+    value=$(printf '%s' "$value" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+    [ -n "$value" ] || continue
+    KEYS="$KEYS$name=$value
 "
-done
+  done <<EOF
+$(grep -E '^  [A-Z][A-Z0-9_]*:[[:space:]]*[^[:space:]]' "$HOME/.dsh/.credentials.yaml" 2>/dev/null || true)
+EOF
+fi
 printf '%s' "$KEYS" > "$TMP/remote.env"
 
 keys=$(grep -c '=' "$TMP/remote.env" 2>/dev/null || true)
