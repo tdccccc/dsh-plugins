@@ -1,10 +1,10 @@
 #!/bin/sh
 # Discover and manage a remote dsh web instance over ssh.
 #
-#   bin/remote.sh a100-146 probe                    # one JSON object describing it
-#   bin/remote.sh a100-146 logs --lines 50          # tail its log
-#   bin/remote.sh a100-146 service restart          # restart its unit
-#   bin/remote.sh a100-146 service restart --dry-run
+#   bin/remote.sh user@host probe                    # one JSON object describing it
+#   bin/remote.sh user@host logs --lines 50          # tail its log
+#   bin/remote.sh user@host service restart          # restart its unit
+#   bin/remote.sh user@host service restart --dry-run
 #
 # The remote side is discovered rather than assumed: the service unit names the
 # process that serves dsh web, that process names the Node installation, that

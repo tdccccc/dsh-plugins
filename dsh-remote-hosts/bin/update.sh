@@ -1,11 +1,11 @@
 #!/bin/sh
 # Update the dsh CLI that serves a remote host, then restart its web unit.
 #
-#   bin/update.sh a100-146                       # latest published version
-#   bin/update.sh a100-146 --version 0.2.2-rc.3  # the version this app runs
-#   bin/update.sh a100-146 --tag next --dry-run
-#   bin/update.sh a100-146 --no-restart
-#   bin/update.sh a100-146 --unit dsh-web-2 --port 27995
+#   bin/update.sh user@host                       # latest published version
+#   bin/update.sh user@host --version 0.2.2-rc.3  # the version this app runs
+#   bin/update.sh user@host --tag next --dry-run
+#   bin/update.sh user@host --no-restart
+#   bin/update.sh user@host --unit dsh-web-2 --port 27995
 #
 # --unit NAME (default dsh-web), --kind KIND (systemd-user | launchd-user |
 # command | external) and --port N follow the same service descriptor the

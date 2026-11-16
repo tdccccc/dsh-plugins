@@ -1,9 +1,9 @@
 #!/bin/sh
 # Mirror local dsh preferences and settings onto a remote host running dsh web.
 #
-#   bin/sync.sh a100-146            # copy files only
-#   bin/sync.sh a100-146 --restart  # copy, then restart the remote dsh-web unit
-#   bin/sync.sh a100-146 --dry-run  # show the plan
+#   bin/sync.sh user@host            # copy files only
+#   bin/sync.sh user@host --restart  # copy, then restart the remote dsh-web unit
+#   bin/sync.sh user@host --dry-run  # show the plan
 #
 # A managed row can point at another service shape:
 #   --profile NAME   remote dsh profile directory (default web)

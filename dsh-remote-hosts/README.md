@@ -177,11 +177,11 @@ The overlay's actions menu and the scripts share one behavior:
 Scripts run without the UI too:
 
 ```sh
-bin/sync.sh a100-146 --restart --profile web --unit dsh-web --kind systemd-user
-bin/update.sh a100-146 --version 0.2.2-rc.3 --unit dsh-web --port 27993 --dry-run
-bin/remote.sh a100-146 probe --sessions-window 10
-bin/remote.sh a100-146 logs --lines 50
-bin/remote.sh a100-146 service restart --dry-run
+bin/sync.sh user@host --restart --profile web --unit dsh-web --kind systemd-user
+bin/update.sh user@host --version 0.2.2-rc.3 --unit dsh-web --port 27993 --dry-run
+bin/remote.sh user@host probe --sessions-window 10
+bin/remote.sh user@host logs --lines 50
+bin/remote.sh user@host service restart --dry-run
 ```
 
 `update.sh` discovers the remote toolchain instead of assuming one: the service
@@ -206,6 +206,10 @@ npm test            # node --test: config parsing, routes, client module, script
 GitHub Actions runs the same suite on Ubuntu with Node 24. The remote helper
 scripts are plain POSIX sh; their argument validation is covered by the tests,
 but anything that talks to a real remote stays out of CI.
+
+Documentation and examples use placeholders only (`user@host`, `gpu-1`,
+`/path/to`). Keep real hostnames, local paths, account names and tokens out of
+the repository and its commit messages.
 
 Known follow-ups and their priorities live in
 [docs/issues/roadmap.md](docs/issues/roadmap.md).
