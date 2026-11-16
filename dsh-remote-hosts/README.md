@@ -125,7 +125,9 @@ connected until the plugin unloads.
 In the app the same settings are a compact card list:
 
 - a card is added with one click and needs only a name plus **SSH-managed**
-  host or **Direct URL**; the ID is derived from the name when left empty;
+  host or **Direct URL**; the ID is derived from the name (or the target) when
+  left empty, a derived ID that is already taken gets `-2`, `-3`, … and a
+  typed ID still has to be unique;
 - ports, remote log, service descriptor and update target live under
   **Advanced settings** and keep their defaults when untouched;
 - the pin icon toggles the left-sidebar row without deleting the host,

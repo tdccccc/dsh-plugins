@@ -563,6 +563,23 @@ window.__ModuleLoader__.load({
     function validateDraft(draft, t) {
       const values = [];
       const ids = new Set();
+      // An id typed into the advanced field wins over every derived id, even
+      // one further down the list: only a derived id is allowed to step aside.
+      const explicitIds = new Set();
+      for (const row of draft) {
+        const explicit = typeof row.id === 'string' ? row.id.trim() : '';
+        if (explicit) explicitIds.add(explicit);
+      }
+      const uniqueId = (base, used) => {
+        let id = base.slice(0, 63);
+        let suffix = 2;
+        while (used.has(id)) {
+          const tail = '-' + suffix;
+          id = base.slice(0, 63 - tail.length) + tail;
+          suffix += 1;
+        }
+        return id;
+      };
       draft.forEach((row, index) => {
         const mode = row.mode === 'ssh' ? 'ssh' : 'url';
         const sshHost = row.sshHost.trim();
@@ -570,15 +587,17 @@ window.__ModuleLoader__.load({
         if (!row.id.trim() && !row.label.trim() && !rawUrl && !sshHost) return;
         const where = t('row') + ' ' + (index + 1) + ': ';
         // ID is an implementation detail for most users: derive it from the
-        // name, the active target, or the URL host unless the advanced field
-        // overrides it.
+        // name, the active target, or the URL host. A derived collision gets a
+        // -2/-3 suffix instead of an error; the saved draft then shows the
+        // final value in the advanced field.
         let id = row.id.trim();
         if (!id) {
           let urlHost = '';
           try { if (rawUrl) urlHost = new URL(rawUrl).hostname; } catch {}
-          id = slugOf(row.label) || slugOf(mode === 'ssh' ? sshHost : urlHost);
+          const base = slugOf(row.label) || slugOf(mode === 'ssh' ? sshHost : urlHost);
+          if (!base) throw new Error(where + t('idRequired'));
+          id = uniqueId(base, new Set([...ids, ...explicitIds]));
         }
-        if (!id) throw new Error(where + t('idRequired'));
         if (!ID_PATTERN.test(id)) throw new Error(where + t('badId'));
         if (ids.has(id)) throw new Error(where + t('duplicateId') + ' ' + id);
         ids.add(id);
