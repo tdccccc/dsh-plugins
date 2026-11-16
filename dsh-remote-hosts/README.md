@@ -131,7 +131,10 @@ In the app the same settings are a compact card list:
 - every saved SSH card has **测试连接**: it probes the saved configuration and
   writes the dsh version, service state and port HTTP into the card, or the
   probe failure reason when it cannot reach the host. A new card must be saved
-  first; URL-only rows are not probed.
+  first; URL-only rows are not probed;
+- switching **SSH-managed** / **Direct URL** keeps the other address in the
+  draft, so an accidental switch does not erase it; saving writes only the
+  selected side.
 - the remaining card actions open the host, or remove the card.
 
 Saving re-applies the sidebar registration immediately; no restart is needed

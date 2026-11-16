@@ -447,6 +447,9 @@ window.__ModuleLoader__.load({
         profile: textOf(row.profile),
         updateChannel: textOf(row.updateChannel),
         sidebar: row.sidebar !== false,
+        // Draft-only: the mode picks which side is saved, while both address
+        // fields stay in the draft so a misclick does not erase a typed value.
+        mode: row.sshHost ? 'ssh' : 'url',
       };
     };
     // Derive a stable panel id from a human label/host when the user leaves the
@@ -543,48 +546,57 @@ window.__ModuleLoader__.load({
       const values = [];
       const ids = new Set();
       draft.forEach((row, index) => {
+        const mode = row.mode === 'ssh' ? 'ssh' : 'url';
         const sshHost = row.sshHost.trim();
         const rawUrl = row.url.trim();
         if (!row.id.trim() && !row.label.trim() && !rawUrl && !sshHost) return;
         const where = t('row') + ' ' + (index + 1) + ': ';
         // ID is an implementation detail for most users: derive it from the
-        // name, SSH host, or URL host unless the advanced field overrides it.
+        // name, the active target, or the URL host unless the advanced field
+        // overrides it.
         let id = row.id.trim();
         if (!id) {
           let urlHost = '';
           try { if (rawUrl) urlHost = new URL(rawUrl).hostname; } catch {}
-          id = slugOf(row.label) || slugOf(sshHost) || slugOf(urlHost);
+          id = slugOf(row.label) || slugOf(mode === 'ssh' ? sshHost : urlHost);
         }
         if (!id) throw new Error(where + t('idRequired'));
         if (!ID_PATTERN.test(id)) throw new Error(where + t('badId'));
         if (ids.has(id)) throw new Error(where + t('duplicateId') + ' ' + id);
         ids.add(id);
-        const url = rawUrl ? parseHttpUrl(rawUrl) : '';
-        if (rawUrl && !url) throw new Error(where + t('badUrl'));
-        // A managed host reaches the remote through its proxy, so its URL is
-        // optional; without either target the row could never open anything.
-        if (!url && !sshHost) throw new Error(where + t('needsTarget'));
+        const label = row.label.trim() || id;
+        // Only the selected side is saved. The other side stays in the draft
+        // until the next save rebuilds it, so switching back and forth does
+        // not lose a typed address.
+        if (mode === 'url') {
+          const url = rawUrl ? parseHttpUrl(rawUrl) : '';
+          if (rawUrl && !url) throw new Error(where + t('badUrl'));
+          if (!url) throw new Error(where + t('needsTarget'));
+          const value = { id, label, url };
+          if (row.sidebar === false) value.sidebar = false;
+          values.push(value);
+          return;
+        }
+        if (!sshHost) throw new Error(where + t('needsTarget'));
         const remotePort = parsePort(row.remotePort, 1, 65535);
         const localPort = parsePort(row.localPort, 0, 65535);
         if (Number.isNaN(remotePort) || Number.isNaN(localPort)) throw new Error(where + t('badPort'));
         const serviceKind = row.serviceKind.trim();
-        if (sshHost && serviceKind && !SERVICE_KINDS.includes(serviceKind)) throw new Error(where + t('badServiceKind'));
+        if (serviceKind && !SERVICE_KINDS.includes(serviceKind)) throw new Error(where + t('badServiceKind'));
         const serviceUnit = row.serviceUnit.trim();
         if (serviceUnit && !UNIT_PATTERN.test(serviceUnit)) throw new Error(where + t('badUnit'));
         const profile = row.profile.trim();
         if (profile && !PROFILE_PATTERN.test(profile)) throw new Error(where + t('badProfile'));
         const updateChannel = row.updateChannel.trim();
         if (updateChannel && !CHANNEL_PATTERN.test(updateChannel)) throw new Error(where + t('badChannel'));
-        const label = row.label.trim() || id;
-        const value = { id, label, url };
-        if (sshHost) value.sshHost = sshHost;
+        const value = { id, label, url: '', sshHost };
         if (remotePort !== null) value.remotePort = remotePort;
         if (localPort !== null) value.localPort = localPort;
         if (row.remoteLog.trim()) value.remoteLog = row.remoteLog.trim();
-        if (sshHost && serviceKind) value.serviceKind = serviceKind;
-        if (sshHost && serviceUnit) value.serviceUnit = serviceUnit;
-        if (sshHost && profile) value.profile = profile;
-        if (sshHost && updateChannel) value.updateChannel = updateChannel;
+        if (serviceKind) value.serviceKind = serviceKind;
+        if (serviceUnit) value.serviceUnit = serviceUnit;
+        if (profile) value.profile = profile;
+        if (updateChannel) value.updateChannel = updateChannel;
         if (row.sidebar === false) value.sidebar = false;
         values.push(value);
       });
@@ -692,14 +704,18 @@ window.__ModuleLoader__.load({
 
       // The simple form asks only for a name plus an SSH host or a URL; the
       // mode switch decides which of the two target shapes the host uses.
-      const modeOf = (row) => (row.sshHost.trim() ? 'ssh' : 'url');
+      const modeOf = (row) => (row.mode === 'ssh' ? 'ssh' : 'url');
+      // The draft keeps both address fields; switching only changes which one
+      // is shown and which one a save writes.
       const setMode = (index, mode) => {
-        if (mode === 'ssh') patchRow(index, 'url', '');
-        else patchRow(index, 'sshHost', '');
+        patchRow(index, 'mode', mode);
       };
       const summaryOf = (row) => {
-        if (row.sshHost.trim()) {
-          return 'ssh · ' + row.sshHost.trim() + ' · :' + (row.remotePort.trim() || '27993');
+        if (modeOf(row) === 'ssh') {
+          const host = row.sshHost.trim();
+          return host
+            ? 'ssh · ' + host + ' · :' + (row.remotePort.trim() || '27993')
+            : 'ssh · ' + t('notConfigured');
         }
         return row.url.trim() || t('notConfigured');
       };
