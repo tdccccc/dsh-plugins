@@ -159,6 +159,9 @@ GitHub Actions runs the same suite on Ubuntu with Node 24. The remote helper
 scripts are plain POSIX sh; their argument validation is covered by the tests,
 but anything that talks to a real remote stays out of CI.
 
+Known follow-ups and their priorities live in
+[docs/issues/roadmap.md](docs/issues/roadmap.md).
+
 ## Install
 
 ```sh
