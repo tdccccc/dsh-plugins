@@ -31,6 +31,7 @@ test('an empty server list renders no rows', async () => {
   const host = await setup({ servers: [] });
   try {
     assert.deepEqual([...host.routes.keys()].sort(), [
+      '/api/remote-hosts/activate',
       '/api/remote-hosts/logs',
       '/api/remote-hosts/probe',
       '/api/remote-hosts/reconnect',
@@ -72,6 +73,7 @@ test('routes reject bad payloads and unmanaged hosts', async () => {
       ['/api/remote-hosts/update', { host: 'nope' }, 400],
       ['/api/remote-hosts/update', { host: 'demo' }, 400],
       ['/api/remote-hosts/probe', { host: 'demo' }, 400],
+      ['/api/remote-hosts/activate', { host: 'demo' }, 400],
       ['/api/remote-hosts/logs', { host: 'demo' }, 400],
       ['/api/remote-hosts/service', { host: 'demo', action: 'explode' }, 400],
       ['/api/remote-hosts/service', { host: 'demo', action: 'restart' }, 400],
@@ -83,6 +85,21 @@ test('routes reject bad payloads and unmanaged hosts', async () => {
       const payload = await response.json();
       assert.equal(payload.ok, false);
     }
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('a managed host stays dormant until the browser activates it', async () => {
+  const host = await setup({ servers: [{ id: 'remote', sshHost: 'user@example.invalid', remotePort: 27993 }] });
+  try {
+    const payload = await (await host.routes.get('/api/remote-hosts/status').fetch(new Request('http://127.0.0.1/api/remote-hosts/status'))).json();
+    assert.equal(payload.servers.length, 1);
+    assert.equal(payload.servers[0].managed, true);
+    assert.equal(payload.servers[0].state, 'dormant');
+    assert.equal(payload.servers[0].error, '');
+    assert.equal(payload.servers[0].proxyUrl, '');
+    assert.equal(payload.servers[0].probe, null);
   } finally {
     await host.dispose();
   }

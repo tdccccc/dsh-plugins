@@ -18,6 +18,7 @@ window.__ModuleLoader__.load({
     const PROBE_ROUTE = '/api/remote-hosts/probe';
     const SERVICE_ROUTE = '/api/remote-hosts/service';
     const LOGS_ROUTE = '/api/remote-hosts/logs';
+    const ACTIVATE_ROUTE = '/api/remote-hosts/activate';
     // The Host refuses a restart/stop while the remote wrote session files in
     // its window; the browser turns that code into a second confirmation.
     const ACTIVE_SESSION_CODE = 'active-sessions';
@@ -58,6 +59,7 @@ window.__ModuleLoader__.load({
       connecting: 'Connecting…',
       offline: 'Offline',
       externalState: 'External',
+      dormant: 'Dormant',
       statusUnavailable: 'Status unavailable',
       retryConnect: 'Retry',
       reconnectFailed: 'Reconnect failed: {detail}',
@@ -184,6 +186,7 @@ window.__ModuleLoader__.load({
       connecting: '连接中…',
       offline: '离线',
       externalState: '外部地址',
+      dormant: '休眠',
       statusUnavailable: '状态不可用',
       retryConnect: '重试',
       reconnectFailed: '重连失败：{detail}',
@@ -850,6 +853,18 @@ window.__ModuleLoader__.load({
         try { ctx.layout.selectPanel(null); } catch {}
       };
 
+      // Every managed host stays dormant until the browser says it is opening
+      // it; active:false releases the host it left to the idle timer instead of
+      // dropping its warm connection at once.
+      const activateHost = (id, active) => {
+        if (typeof fetch !== 'function') return Promise.resolve();
+        return fetch(ACTIVATE_ROUTE, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ host: id, active }),
+        }).catch(() => {});
+      };
+
       const RemoteView = (props) => {
         const s = useStore();
         const translate = useTranslate(ctx.locale);
@@ -1194,6 +1209,9 @@ window.__ModuleLoader__.load({
           writeStore(LAST_HOST_KEY, active.id);
           writeStore(OPEN_KEY, '1');
           pollStatus().catch(() => {});
+          // Opening the host is what starts its tunnel; poll again once the
+          // Host has begun connecting so the placeholder leaves "dormant".
+          activateHost(active.id, true).then(() => { pollStatus().catch(() => {}); });
           const resync = () => {
             const next = measureInset();
             if (next !== state.inset) setState({ ...state, inset: next });
@@ -1214,6 +1232,7 @@ window.__ModuleLoader__.load({
             window.removeEventListener('resize', resync);
             window.removeEventListener('keydown', onKey);
             document.removeEventListener('click', onRowClick, true);
+            activateHost(active.id, false);
           };
         }, [activeId]);
 
@@ -1249,6 +1268,7 @@ window.__ModuleLoader__.load({
           if (state === 'online') return translate('online');
           if (state === 'connecting') return translate('connecting');
           if (state === 'offline') return translate('offline');
+          if (state === 'dormant') return translate('dormant');
           if (state === 'external') return '';
           return translate('statusUnavailable');
         };
@@ -1257,6 +1277,15 @@ window.__ModuleLoader__.load({
           borderRadius: '8px', padding: '4px 10px', background: 'transparent',
           color: 'inherit', opacity: off ? 0.4 : 0.7,
         });
+
+        // A Host reload forgets every activation. Wake the host that is on
+        // screen again instead of leaving it dormant until the user switches
+        // away and back.
+        const dormantActive = !!(active && entryFor(active) && entryFor(active).state === 'dormant');
+        React.useEffect(() => {
+          if (!dormantActive || !active) return;
+          activateHost(active.id, true).then(() => { pollStatus().catch(() => {}); });
+        }, [activeId, dormantActive]);
         const disabled = syncState.busy || !active;
         // Only a host this plugin owns has an ssh target to update.
         const managed = !!(active && (active.managed === true || (entryFor(active) && entryFor(active).managed === true)));
@@ -1461,7 +1490,8 @@ window.__ModuleLoader__.load({
                   color: 'var(--dsw-alias-label-secondary, inherit)',
                 },
               },
-                h('div', { style: { fontSize: '13px' } }, state === 'connecting' ? translate('connecting') : translate('offline')),
+                h('div', { style: { fontSize: '13px' } },
+                  state === 'connecting' ? translate('connecting') : state === 'dormant' ? translate('dormant') : translate('offline')),
                 state === 'offline' && entry && entry.error
                   ? h('div', {
                     style: {

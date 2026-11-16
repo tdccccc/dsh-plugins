@@ -28,6 +28,8 @@ const PROBE_TIMEOUT_MS = 30000;
 const PROBE_TTL_MS = 60000;
 const SERVICE_TIMEOUT_MS = 120000;
 const LOG_TIMEOUT_MS = 30000;
+// How often dormant links are checked; the idle timeout itself is configurable.
+const IDLE_SWEEP_MS = 30000;
 
 // Nothing is built in: the plugin ships without assuming a particular host, so
 // an empty server list simply renders no rows until one is configured.
@@ -58,10 +60,14 @@ export const Config = Schema.object({
   // Minutes of recent session writes the probe counts before a restart is
   // allowed to interrupt a remote session.
   sessionWindow: Schema.natural().min(1).max(1440).default(10),
+  // Minutes an unused host keeps its tunnel and proxy before it goes dormant;
+  // 0 keeps activated hosts connected until the plugin unloads.
+  idleTimeout: Schema.natural().max(1440).default(10),
 }).i18n({
   en: {
     $desc: 'Remote dsh servers shown in the sidebar; the same list authorizes the update and service routes.',
     sessionWindow: 'Minutes of recent session activity counted by the remote probe; a restart or stop is refused while a session wrote inside that window.',
+    idleTimeout: 'Minutes an unused host keeps its tunnel and proxy before it goes dormant; 0 keeps it connected until the plugin unloads.',
     servers: {
       $desc: 'Each server needs a unique id and a display label. With sshHost the plugin owns the tunnel and proxy; without it the url is opened as is.',
       id: 'Stable identifier used in panel ids and sync requests: letters, digits, and dashes, up to 63 characters.',
@@ -81,6 +87,7 @@ export const Config = Schema.object({
   zh: {
     $desc: '侧边栏中的远程 dsh 服务器；同一份列表也决定更新与服务接口允许的主机。',
     sessionWindow: '远端 probe 统计最近多少分钟内的会话活动；窗口内有写入时，重启或停止操作会被拦截。',
+    idleTimeout: '未使用的主机保留隧道和代理的分钟数，超时后回到休眠；0 表示保持连接直到插件卸载。',
     servers: {
       $desc: '每台服务器需要唯一的 id 和显示名称。填写 sshHost 后由插件管理隧道和代理；不填则直接打开 url。',
       id: '用于面板 id 和同步请求的稳定标识：字母、数字和连字符，最多 63 个字符。',
@@ -268,6 +275,13 @@ class ServerLink {
     this.server = server;
     this.startError = '';
     this.sessionWindow = typeof options.sessionWindow === 'function' ? options.sessionWindow : () => 10;
+    // A new link is dormant: the browser activates the host it opens, and the
+    // idle sweep stops it again after the idle timeout.
+    this.activated = false;
+    this.running = false;
+    this.touchedAt = 0;
+    this.starting = null;
+    this.stopping = null;
     // Last probe result (service/version/log health) is cached by time, not by
     // connection state: it only needs a fresh SSH read to refresh.
     this.probe = { at: 0, info: null, error: '', pending: null };
@@ -298,16 +312,64 @@ class ServerLink {
     const tunnel = this.tunnel;
     const proxy = this.proxy;
     if (!tunnel || !proxy) return;
-    try {
-      await tunnel.start();
-      if (this.proxy !== proxy) return;
-      await proxy.start();
-    } catch (error) {
-      this.startError = 'could not start the tunnel or proxy: ' + (error && error.message ? error.message : String(error));
-    }
+    // A repeated activate joins the attempt in flight instead of stacking a
+    // second ssh process and proxy on the same host.
+    if (this.starting) return this.starting;
+    this.startError = '';
+    this.running = true;
+    this.starting = (async () => {
+      try {
+        await tunnel.start();
+        if (this.proxy !== proxy) return;
+        await proxy.start();
+      } catch (error) {
+        this.startError = 'could not start the tunnel or proxy: ' + (error && error.message ? error.message : String(error));
+      }
+    })().finally(() => { this.starting = null; });
+    return this.starting;
+  }
+
+  activate() {
+    this.activated = true;
+    this.touchedAt = Date.now();
+    // Reopening a host while its idle stop is still running waits for the
+    // stop, then starts a fresh tunnel instead of racing the teardown.
+    if (this.stopping) return this.stopping.then(() => this.start());
+    return this.start();
+  }
+
+  // Leaving the screen only marks the host idle: the connection stays warm for
+  // the idle timeout, so switching back does not pay for a new ssh handshake.
+  deactivate() {
+    this.activated = false;
+    this.touchedAt = Date.now();
+  }
+
+  // Stop the warm connection but keep the tunnel/proxy objects and the chosen
+  // local port, so a later activate reconnects on the same origin.
+  async idle() {
+    this.activated = false;
+    if (this.starting) await this.starting;
+    // A browser that reopened the host during the wait keeps it running.
+    if (this.activated) return;
+    if (this.stopping) return this.stopping;
+    if (!this.running) return;
+    this.running = false;
+    const proxy = this.proxy;
+    const tunnel = this.tunnel;
+    this.stopping = (async () => {
+      if (proxy) await proxy.stop();
+      if (tunnel) await tunnel.stop();
+    })().finally(() => { this.stopping = null; });
+    return this.stopping;
   }
 
   async reconnect() {
+    this.touchedAt = Date.now();
+    this.activated = true;
+    // A dormant host has no proxy listener or ssh child to restart; starting
+    // both from scratch is the reconnect.
+    if (!this.running) return this.activate();
     if (this.proxy) this.proxy.reset();
     if (this.tunnel) await this.tunnel.restart();
   }
@@ -354,6 +416,10 @@ class ServerLink {
   }
 
   async stop() {
+    this.activated = false;
+    this.running = false;
+    if (this.starting) await this.starting;
+    if (this.stopping) await this.stopping;
     const proxy = this.proxy;
     const tunnel = this.tunnel;
     this.proxy = null;
@@ -364,6 +430,17 @@ class ServerLink {
   }
 
   status() {
+    // Nothing is running for a host nobody opened; an empty proxyUrl keeps the
+    // browser from pointing a frame at a dead port.
+    if (!this.running) {
+      return {
+        state: this.activated ? 'connecting' : 'dormant',
+        error: '',
+        proxyUrl: '',
+        probe: this.probeSnapshot(),
+        updatedAt: this.touchedAt,
+      };
+    }
     const tunnel = this.tunnel ? this.tunnel.info : { state: 'offline', error: this.startError, updatedAt: 0 };
     const proxy = this.proxy ? this.proxy.info : { state: 'offline', error: '', proxyUrl: '', updatedAt: 0 };
     let state = 'offline';
@@ -397,6 +474,11 @@ export function apply(ctx, config) {
   // id -> reason a fixed local port is unusable; rebuilt by reconcile.
   let portErrors = new Map();
   let disposed = false;
+  // The host the browser currently shows, and when it last asked for status.
+  // Both keep only the on-screen host warm; every other link idles out by its
+  // own clock and stops its ssh process and proxy port.
+  let currentId = null;
+  let lastSeenAt = 0;
 
   const sameTarget = (link, server) => link.server.sshHost === server.sshHost
     && link.server.remotePort === server.remotePort
@@ -432,18 +514,23 @@ export function apply(ctx, config) {
       keep.add(server.id);
       const existing = links.get(server.id);
       if (existing && sameTarget(existing, server)) { existing.server = server; continue; }
+      // A replaced link keeps the state of the one it replaces: an open host
+      // reconnects on its new target, every other host stays dormant.
+      const warm = !!(existing && existing.activated) || currentId === server.id;
       if (existing) {
         links.delete(server.id);
         existing.stop().catch(() => {});
       }
       const link = new ServerLink(server, { sessionWindow: () => sessionWindowMinutes(config) });
+      link.touchedAt = Date.now();
       links.set(server.id, link);
-      link.start().catch(() => {});
+      if (warm) link.activate().catch(() => {});
     }
     for (const [id, link] of links) {
       if (keep.has(id)) continue;
       links.delete(id);
       link.stop().catch(() => {});
+      if (currentId === id) currentId = null;
     }
   };
 
@@ -451,6 +538,8 @@ export function apply(ctx, config) {
   // shape: proxyUrl is where the iframe goes, or empty while it cannot open.
   const describe = () => {
     reconcile();
+    // The 3s status poll is the browser's heartbeat for the on-screen host.
+    lastSeenAt = Date.now();
     return listed.map((server) => {
       const link = links.get(server.id);
       // url is the configured address (empty for a managed host until its proxy
@@ -510,12 +599,40 @@ export function apply(ctx, config) {
     error: server.label + ' has ' + sessions.active + ' session(s) active in the last ' + sessions.window + ' minutes',
   }, 409);
 
+  // An idle host is a warm one nobody is looking at. The host on screen stays
+  // while the browser keeps polling; a stale current host (window closed) and
+  // every host left behind stop after the idle timeout. 0 disables the sweep.
+  const idleTimeoutMs = () => {
+    const raw = config && config.idleTimeout;
+    const value = raw && typeof raw.get === 'function' ? raw.get() : raw;
+    const minutes = Math.trunc(Number(value));
+    if (!Number.isFinite(minutes) || minutes <= 0) return 0;
+    return Math.min(minutes, 1440) * 60000;
+  };
+  const sweepIdle = () => {
+    if (disposed) return;
+    const ttl = idleTimeoutMs();
+    if (!ttl) return;
+    const now = Date.now();
+    for (const [id, link] of links) {
+      if (!link.running) continue;
+      if (id === currentId && now - lastSeenAt <= ttl) continue;
+      if (now - link.touchedAt <= ttl) continue;
+      if (id === currentId) currentId = null;
+      link.idle().catch(() => {});
+    }
+  };
+
   // Tunnels and proxies are effects of this fiber: an unload disposes them, and
   // nothing survives as an orphan process or a bound port.
   ctx.effect(() => {
     reconcile();
+    const idleTimer = setInterval(sweepIdle, IDLE_SWEEP_MS);
+    idleTimer.unref?.();
     return async () => {
       disposed = true;
+      clearInterval(idleTimer);
+      currentId = null;
       const current = [...links.values()];
       links.clear();
       await Promise.all(current.map((link) => link.stop()));
@@ -529,6 +646,31 @@ export function apply(ctx, config) {
     fetch: () => Promise.resolve(jsonResponse({ ok: true, localVersion: localDshVersion(), servers: describe() })),
   }), 'remote-hosts: status route');
 
+  // Opening a host is the only thing that starts its tunnel. active:false means
+  // "no longer on screen"; the link idles out instead of dropping at once.
+  ctx.effect(() => ctx.connection.fetch.register({
+    path: '/api/remote-hosts/activate',
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      const payload = await readJson(request);
+      if (!payload) return jsonResponse({ ok: false, error: 'bad json' }, 400);
+      const host = String(payload.host || '');
+      reconcile();
+      const link = links.get(host);
+      if (!link) return jsonResponse({ ok: false, error: 'host is not managed by this plugin: ' + host }, 400);
+      lastSeenAt = Date.now();
+      if (payload.active === false) {
+        if (currentId === host) currentId = null;
+        link.deactivate();
+      } else {
+        currentId = host;
+        await link.activate().catch(() => {});
+      }
+      return jsonResponse({ ok: true, server: { id: host, ...link.status() } });
+    },
+  }), 'remote-hosts: activate route');
+
   ctx.effect(() => ctx.connection.fetch.register({
     path: '/api/remote-hosts/reconnect',
     methods: ['POST'],
@@ -540,6 +682,8 @@ export function apply(ctx, config) {
       reconcile();
       const link = links.get(id);
       if (!link) return jsonResponse({ ok: false, error: 'host is not managed by this plugin: ' + id }, 400);
+      currentId = id;
+      lastSeenAt = Date.now();
       link.reconnect().catch(() => {});
       return jsonResponse({ ok: true, server: { id, ...link.status() } });
     },

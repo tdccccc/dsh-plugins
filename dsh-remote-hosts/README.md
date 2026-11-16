@@ -20,12 +20,17 @@ instances is managed.
   connection dot, the primary **同步配置** and **更新 dsh** actions, an actions
   menu (copy sync, preview sync, remote check, restart service, remote log,
   reload, open in browser), a status line, and a log toggle.
-- Remote state (tunnel + proxy) shows *connecting / online / offline*; the
-  actions menu reports the remote dsh version and service state once checked.
+- Remote state (tunnel + proxy) shows *connecting / online / offline*, or
+  *dormant* for a configured host nobody has opened yet; the actions menu
+  reports the remote dsh version and service state once checked.
 - Clicking the active sidebar row again or pressing Escape returns to the
   conversation; Escape first closes the actions menu when it is open. ⌘/Ctrl+1…9
   switches hosts. The browser half remembers the host that was on screen and
   reopens it after a reload, until you go back.
+- Only the host you open gets an ssh tunnel and a proxy port. Other managed
+  hosts stay dormant with no process and no bound port; a host you leave stops
+  after `idleTimeout` (default 10 minutes, 0 disables) and reconnects the next
+  time it is opened.
 - An empty server list renders no rows; add one in the plugin settings.
 
 ## Connections
@@ -37,15 +42,21 @@ from the remote log over SSH, logs in, and attaches the cookie itself. It only
 listens on 127.0.0.1 and refuses non-loopback Hosts, foreign Origins and
 cross-site requests; frame navigation is the one allowed cross-site shape
 because the desktop shell page runs on the `dsh-app://` scheme. Cross-site
-fetches, XHR, WebSockets and subresources are still refused. Tunnels are
-stopped when the plugin unloads.
+fetches, XHR, WebSockets and subresources are still refused.
+
+A tunnel is created when the browser opens the host, not when the plugin loads:
+the overlay posts to `/api/remote-hosts/activate` when a row is selected, and
+the Host starts that one link. Leaving the host releases it to the idle timer;
+the 3s status poll is the on-screen host's heartbeat, so closing the window
+also lets it go dormant. Tunnels and proxies are stopped when the plugin
+unloads.
 
 A row without `sshHost` is opened at its `url` as is (the old manual proxy).
 A fixed `localPort` must be unique across rows; duplicates are reported in the
 row status instead of letting the second tunnel fail to bind.
 
-All Host routes live under `/api/remote-hosts/`: `status`, `reconnect`,
-`sync`, `update`, `probe`, `service` and `logs`. The platform requires a live
+All Host routes live under `/api/remote-hosts/`: `status`, `activate`,
+`reconnect`, `sync`, `update`, `probe`, `service` and `logs`. The platform requires a live
 browser session for that prefix, which is what stops other local processes from
 triggering a sync, update or service restart.
 
@@ -59,6 +70,8 @@ dsh-remote-hosts → Configure**, or in the profile patch:
   config:
     # Minutes of recent session writes counted before a restart is refused.
     sessionWindow: 10
+    # Minutes an unused host keeps its tunnel before it goes dormant.
+    idleTimeout: 10
     servers:
       - id: gpu-1
         label: GPU box
@@ -98,6 +111,11 @@ dsh-remote-hosts → Configure**, or in the profile patch:
 The plugin-level `sessionWindow` (minutes, 1–1440, default 10) is not a server
 field: it is the window the probe uses to decide whether the remote is busy. It
 is passed to `bin/remote.sh probe --sessions-window N`.
+
+The plugin-level `idleTimeout` (minutes, 0–1440, default 10) is how long an
+opened host keeps its tunnel and proxy after it leaves the screen. The host on
+screen is never stopped while the browser polls; 0 keeps every opened host
+connected until the plugin unloads.
 
 In the app the same settings are a compact card list:
 
