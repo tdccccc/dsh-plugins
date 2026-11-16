@@ -77,6 +77,11 @@ test('sidebar visibility defaults to true and persists false', () => {
   assert.equal(toServer({ id: 'y', sshHost: 'host', sidebar: true }).sidebar, true);
 });
 
+test('provision bundles stay a trimmed string', () => {
+  assert.equal(toServer({ id: 'x', sshHost: 'host', bundles: ' dsh-context@0.78.0 ' }).bundles, 'dsh-context@0.78.0');
+  assert.equal(toServer({ id: 'y', sshHost: 'host' }).bundles, '');
+});
+
 test('duplicate ids keep the first row', () => {
   const servers = configuredServers({
     servers: [

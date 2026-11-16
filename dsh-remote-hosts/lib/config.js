@@ -46,6 +46,9 @@ export function toServer(row) {
     : (kind === 'systemd-user' || kind === 'launchd-user' ? 'dsh-web' : '');
   const rawProfile = typeof row.profile === 'string' ? row.profile.trim() : '';
   const rawChannel = typeof row.updateChannel === 'string' ? row.updateChannel.trim() : '';
+  // Space-separated package specs installed on first provisioning; the script
+  // validates each spec again before touching the remote profile.
+  const bundles = typeof row.bundles === 'string' ? row.bundles.trim().slice(0, 500) : '';
   return {
     id,
     label: typeof row.label === 'string' && row.label.trim() ? row.label.trim() : id,
@@ -58,6 +61,7 @@ export function toServer(row) {
     serviceUnit: unit,
     profile: PROFILE_PATTERN.test(rawProfile) ? rawProfile : 'web',
     updateChannel: CHANNEL_PATTERN.test(rawChannel) ? rawChannel : '',
+    bundles,
     // Sidebar visibility is a config choice so a configured host can stay out
     // of the left column without being deleted.
     sidebar: row.sidebar !== false,

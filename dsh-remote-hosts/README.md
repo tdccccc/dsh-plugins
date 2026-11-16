@@ -82,6 +82,8 @@ dsh-remote-hosts → Configure**, or in the profile patch:
         profile: web
         serviceKind: systemd-user
         serviceUnit: dsh-web
+        # Installed by the provision action / provision.sh, once per host.
+        bundles: "@deepseek-ai/dsh-experimental-plugin-market-bundle dsh-context@0.78.0"
       - id: gpu-1-nightly
         label: GPU box (nightly)
         sshHost: user@gpu-1
@@ -108,6 +110,7 @@ dsh-remote-hosts → Configure**, or in the profile patch:
 | `serviceUnit` | systemd unit or launchd label; defaults to `dsh-web` for the managed kinds. |
 | `profile` | Remote profile directory under `~/.dsh/profiles`; default `web`. |
 | `updateChannel` | Update target: empty mirrors this app's dsh version; otherwise an npm dist-tag (`latest`, `next`) or exact version. |
+| `bundles` | Space-separated dsh profile bundles installed by the provision action, e.g. `"dsh-context@0.78.0"`. Empty provisions a plain web profile. |
 | `sidebar` | Show the host as a row in the left sidebar (default true). Hidden hosts stay configured and openable from the settings card or the overlay switcher. The settings pin icon writes this field. |
 
 The plugin-level `sessionWindow` (minutes, 1–1440, default 10) is not a server
@@ -158,6 +161,11 @@ platform sidebar.
 
 The overlay's actions menu and the scripts share one behavior:
 
+- **一键部署** — `bin/provision.sh`: bootstrap a fresh Linux host with Node
+  (pinned 24.12.0, checksum verified), a global dsh (the app's version by
+  default), the `dsh`/`dsh-web` launchers, the systemd user unit, optional
+  profile `bundles`, then the usual settings sync. Idempotent: existing pieces
+  are reused, and the same action repairs a half-provisioned host.
 - **同步配置** — `bin/sync.sh`: mirror the local profile patch, AGENTS.md and
   provider keys, then restart the remote service (asks first). The menu also
   offers copy-only and `--dry-run` preview.
@@ -186,12 +194,20 @@ The overlay's actions menu and the scripts share one behavior:
 Scripts run without the UI too:
 
 ```sh
+bin/provision.sh user@host --port 27993 --profile web --unit dsh-web \
+  --bundles "dsh-context@0.78.0" --sync
 bin/sync.sh user@host --restart --profile web --unit dsh-web --kind systemd-user
 bin/update.sh user@host --version 0.2.2-rc.3 --unit dsh-web --port 27993 --dry-run
 bin/remote.sh user@host probe --sessions-window 10
 bin/remote.sh user@host logs --lines 50
 bin/remote.sh user@host service restart --dry-run
 ```
+
+`provision.sh` is the only script that installs a remote from scratch; sync and
+update assume the service already exists. It needs sudo-free SSH, `curl`,
+`tar` and `sha256sum` on the remote, and only handles `systemd-user` hosts
+(launchd or externally managed units keep their manual setup). It installs Node under
+`~/.local/node/v<version>` and never touches a system Node.
 
 `update.sh` discovers the remote toolchain instead of assuming one: the service
 names the Node that serves it, that Node's prefix owns the global

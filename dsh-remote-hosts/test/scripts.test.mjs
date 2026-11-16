@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const script = (name) => fileURLToPath(new URL('../bin/' + name, import.meta.url));
-const SCRIPTS = ['sync.sh', 'update.sh', 'remote.sh'];
+const SCRIPTS = ['sync.sh', 'update.sh', 'remote.sh', 'provision.sh'];
 
 const run = (args, options = {}) => new Promise((resolve) => {
   execFile('/bin/sh', args, { timeout: 10000, ...options }, (error, stdout, stderr) => {
@@ -34,6 +34,12 @@ test('scripts reject bad arguments before touching ssh', async () => {
     [[script('remote.sh'), 'host', 'service', 'explode'], /bad service action/],
     [[script('remote.sh'), 'host', 'logs', '--sessions-window', '30'], /not valid for logs/],
     [[script('remote.sh'), 'host', 'probe', '--sessions-window', 'zero'], /bad session window/],
+    [[script('provision.sh')], /usage/],
+    [[script('provision.sh'), 'host', '--port', 'abc'], /bad port/],
+    [[script('provision.sh'), 'host', '--kind', 'systemd-user'], /unknown option/],
+    [[script('provision.sh'), 'host', '--profile', '../x'], /bad profile/],
+    [[script('provision.sh'), 'host', '--node-version', 'x'], /bad node version/],
+    [[script('provision.sh'), 'host', '--bundles', 'pkg;rm'], /bad bundle spec/],
   ];
   for (const [args, pattern] of cases) {
     const result = await run(args);

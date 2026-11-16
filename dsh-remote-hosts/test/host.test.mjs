@@ -34,6 +34,7 @@ test('an empty server list renders no rows', async () => {
       '/api/remote-hosts/activate',
       '/api/remote-hosts/logs',
       '/api/remote-hosts/probe',
+      '/api/remote-hosts/provision',
       '/api/remote-hosts/reconnect',
       '/api/remote-hosts/service',
       '/api/remote-hosts/status',
@@ -78,6 +79,8 @@ test('routes reject bad payloads and unmanaged hosts', async () => {
       ['/api/remote-hosts/service', { host: 'demo', action: 'explode' }, 400],
       ['/api/remote-hosts/service', { host: 'demo', action: 'restart' }, 400],
       ['/api/remote-hosts/sync', 'not json', 400],
+      ['/api/remote-hosts/provision', 'not json', 400],
+      ['/api/remote-hosts/provision', { host: 'demo' }, 400],
     ];
     for (const [path, body, status] of cases) {
       const response = await post(host.routes.get(path), body);

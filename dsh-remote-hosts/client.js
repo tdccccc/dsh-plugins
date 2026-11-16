@@ -18,6 +18,7 @@ window.__ModuleLoader__.load({
     const PROBE_ROUTE = '/api/remote-hosts/probe';
     const SERVICE_ROUTE = '/api/remote-hosts/service';
     const LOGS_ROUTE = '/api/remote-hosts/logs';
+    const PROVISION_ROUTE = '/api/remote-hosts/provision';
     const ACTIVATE_ROUTE = '/api/remote-hosts/activate';
     // The Host refuses a restart/stop while the remote wrote session files in
     // its window; the browser turns that code into a second confirmation.
@@ -141,6 +142,14 @@ window.__ModuleLoader__.load({
       updateChannel: 'Update target',
       updateChannelPlaceholder: 'app version',
       badChannel: 'Update target may contain letters, digits, . _ + - only.',
+      bundles: 'Provision bundles',
+      bundlesPlaceholder: 'dsh-context@0.78.0 … (optional)',
+      badBundles: 'Bundle specs may contain letters, digits, @ / . _ : + - only.',
+      provision: 'Provision host',
+      confirmProvision: 'Install Node, dsh, the dsh-web unit and profile bundles on {host}? The remote service restarts.',
+      provisioning: 'Provisioning remote host…',
+      provisionDone: '{host} provisioned',
+      provisionFailed: 'Provisioning failed: {detail}',
       needsTarget: 'Every server needs a URL or an SSH host.',
       badPort: 'Ports must be numbers: remote 1-65535, local 0-65535.',
       switchHost: 'Switch host',
@@ -281,6 +290,14 @@ window.__ModuleLoader__.load({
       updateChannel: '更新目标',
       updateChannelPlaceholder: '跟随本机',
       badChannel: '更新目标只能包含字母、数字和 . _ + -。',
+      bundles: '部署时安装的 bundles',
+      bundlesPlaceholder: 'dsh-context@0.78.0 …（可选）',
+      badBundles: 'bundle 规格只能包含字母、数字和 @ / . _ : + -。',
+      provision: '一键部署主机',
+      confirmProvision: '在 {host} 上安装 Node、dsh、dsh-web 服务和 profile bundles？远端服务会重启。',
+      provisioning: '正在部署远端主机…',
+      provisionDone: '{host} 部署完成',
+      provisionFailed: '部署失败：{detail}',
       needsTarget: '每台服务器至少需要地址或 SSH 主机。',
       badPort: '端口必须是数字：远端 1-65535，本地 0-65535。',
       switchHost: '切换主机',
@@ -446,6 +463,7 @@ window.__ModuleLoader__.load({
         serviceUnit: textOf(row.serviceUnit),
         profile: textOf(row.profile),
         updateChannel: textOf(row.updateChannel),
+        bundles: textOf(row.bundles),
         sidebar: row.sidebar !== false,
         // Draft-only: the mode picks which side is saved, while both address
         // fields stay in the draft so a misclick does not erase a typed value.
@@ -589,6 +607,12 @@ window.__ModuleLoader__.load({
         if (profile && !PROFILE_PATTERN.test(profile)) throw new Error(where + t('badProfile'));
         const updateChannel = row.updateChannel.trim();
         if (updateChannel && !CHANNEL_PATTERN.test(updateChannel)) throw new Error(where + t('badChannel'));
+        const bundles = row.bundles.trim();
+        if (bundles) {
+          for (const spec of bundles.split(/\s+/)) {
+            if (!/^[A-Za-z0-9@/._:+-]+$/.test(spec)) throw new Error(where + t('badBundles'));
+          }
+        }
         const value = { id, label, url: '', sshHost };
         if (remotePort !== null) value.remotePort = remotePort;
         if (localPort !== null) value.localPort = localPort;
@@ -597,6 +621,7 @@ window.__ModuleLoader__.load({
         if (serviceUnit) value.serviceUnit = serviceUnit;
         if (profile) value.profile = profile;
         if (updateChannel) value.updateChannel = updateChannel;
+        if (bundles) value.bundles = bundles;
         if (row.sidebar === false) value.sidebar = false;
         values.push(value);
       });
@@ -905,7 +930,8 @@ window.__ModuleLoader__.load({
               h('div', { className: 'rh-fields' },
                 textField(index, row, 'id', t('idOptional'), { placeholder: t('idPlaceholder') }),
                 mode === 'ssh' ? textField(index, row, 'localPort', t('localPort'), { placeholder: t('localPortPlaceholder'), numeric: true }) : null,
-                mode === 'ssh' ? textField(index, row, 'remoteLog', t('remoteLog'), { placeholder: t('remoteLogPlaceholder') }) : null),
+                mode === 'ssh' ? textField(index, row, 'remoteLog', t('remoteLog'), { placeholder: t('remoteLogPlaceholder') }) : null,
+                mode === 'ssh' ? textField(index, row, 'bundles', t('bundles'), { placeholder: t('bundlesPlaceholder') }) : null),
               mode === 'ssh'
                 ? h('div', { className: 'rh-fields' },
                   serviceKindField(index, row),
@@ -1231,6 +1257,26 @@ window.__ModuleLoader__.load({
             s.localVersion
               ? translate('updated', { host: server.label, version: s.localVersion })
               : translate('updatedLatest', { host: server.label }),
+          );
+          if (!result.ok) return;
+          reload(server.id);
+          pollStatus().catch(() => {});
+          readProbe(server, true);
+        };
+
+        // First-time setup: Node, dsh, launchers, the systemd unit, optional
+        // profile bundles, then a settings sync. The script is idempotent, so the
+        // same action also repairs a half-provisioned host.
+        const provision = async (server) => {
+          if (typeof window.confirm === 'function'
+            && !window.confirm(translate('confirmProvision', { host: server.label }))) return;
+          const result = await runGuarded(
+            server,
+            PROVISION_ROUTE,
+            { host: server.id, sync: true },
+            translate('provisioning'),
+            'provisionFailed',
+            translate('provisionDone', { host: server.label }),
           );
           if (!result.ok) return;
           reload(server.id);
@@ -1568,6 +1614,7 @@ window.__ModuleLoader__.load({
                   menuItem(translate('syncCopy'), () => sync(active, { restart: false }), disabled),
                   menuItem(translate('syncPreview'), () => sync(active, { restart: false, dryRun: true }), disabled),
                   menuItem(translate('probe'), () => readProbe(active, true), !managed || syncState.busy),
+                  menuItem(translate('provision'), () => provision(active), !managed || syncState.busy),
                   menuItem(translate('restartService'), () => runService(active, 'restart'), !managed || syncState.busy),
                   serviceKnown && !serviceActive
                     ? menuItem(translate('startService'), () => runService(active, 'start'), !managed || syncState.busy)

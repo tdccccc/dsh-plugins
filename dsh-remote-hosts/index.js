@@ -19,10 +19,14 @@ export const inject = ['connection'];
 const SCRIPT = fileURLToPath(new URL('./bin/sync.sh', import.meta.url));
 const UPDATE_SCRIPT = fileURLToPath(new URL('./bin/update.sh', import.meta.url));
 const REMOTE_SCRIPT = fileURLToPath(new URL('./bin/remote.sh', import.meta.url));
+const PROVISION_SCRIPT = fileURLToPath(new URL('./bin/provision.sh', import.meta.url));
 const SYNC_TIMEOUT_MS = 300000;
 // An update downloads the whole package tree and restarts the unit, so it gets
 // a longer leash than a settings copy.
 const UPDATE_TIMEOUT_MS = 900000;
+// Provisioning downloads Node and dsh and installs profile bundles on a fresh
+// host, so it gets the longest leash.
+const PROVISION_TIMEOUT_MS = 1800000;
 const TAIL_LINES = 40;
 const PROBE_TIMEOUT_MS = 30000;
 const PROBE_TTL_MS = 60000;
@@ -50,6 +54,8 @@ export const Config = Schema.object({
     serviceUnit: Schema.string().default(''),
     profile: Schema.string().default(''),
     updateChannel: Schema.string().default(''),
+    // Space-separated dsh profile bundles installed by the provision action.
+    bundles: Schema.string().default(''),
     sidebar: Schema.boolean().default(true),
   }))
     // A hand-edited row that fails the item schema is dropped instead of
@@ -81,6 +87,7 @@ export const Config = Schema.object({
       serviceUnit: 'systemd unit or launchd label that runs the remote dsh web (default dsh-web).',
       profile: 'Remote dsh profile directory under ~/.dsh/profiles (default web).',
       updateChannel: 'Update target: empty mirrors this app version, otherwise an npm dist-tag (latest, next) or an exact version.',
+      bundles: 'Space-separated dsh profile bundles provisioned with the host, for example "@deepseek-ai/dsh-experimental-plugin-market-bundle dsh-context@0.78.0".',
       sidebar: 'Show this host as a row in the left sidebar. Hidden hosts stay configured and can be opened from the plugin settings or the overlay switcher.',
     },
   },
@@ -101,6 +108,7 @@ export const Config = Schema.object({
       serviceUnit: '运行远端 dsh web 的 systemd unit 或 launchd label（默认 dsh-web）。',
       profile: '远端 dsh profile 目录名，位于 ~/.dsh/profiles 下（默认 web）。',
       updateChannel: '更新目标：留空跟随本机应用版本，否则填 npm dist-tag（latest、next）或精确版本号。',
+      bundles: '首次部署时安装的 dsh profile bundles，空格分隔，例如 "@deepseek-ai/dsh-experimental-plugin-market-bundle dsh-context@0.78.0"。',
       sidebar: '在左侧栏显示该主机。隐藏后配置仍然保留，可从插件设置或浮层切换器打开。',
     },
   },
@@ -720,6 +728,46 @@ export function apply(ctx, config) {
       return streamCommand(request, args);
     },
   }), 'remote-hosts: sync route');
+
+  // First-time setup on a fresh Linux host: Node, dsh, launchers, the systemd
+  // unit and optional profile bundles, then an ordinary settings sync. It is
+  // idempotent; the settings form can rerun it with force.
+  ctx.effect(() => ctx.connection.fetch.register({
+    path: '/api/remote-hosts/provision',
+    methods: ['POST'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      const payload = await readJson(request);
+      if (!payload) return jsonResponse({ ok: false, error: 'bad json' }, 400);
+      const host = String(payload.host || '');
+      const server = configuredServers(config).find((entry) => entry.id === host);
+      if (!server) return jsonResponse({ ok: false, error: 'unknown host: ' + host }, 400);
+      if (!server.sshHost) return jsonResponse({ ok: false, error: 'host is not managed by this plugin: ' + host }, 400);
+      if (server.serviceKind !== 'systemd-user') {
+        return jsonResponse({ ok: false, error: 'provisioning supports systemd-user hosts only' }, 400);
+      }
+      const dryRun = payload.dryRun === true;
+      reconcile();
+      if (!dryRun && payload.force !== true) {
+        const sessions = await interruptWarning(server);
+        if (sessions) return interrupted(server, sessions);
+      }
+      const args = [
+        PROVISION_SCRIPT, server.sshHost,
+        '--port', String(server.remotePort),
+        '--profile', server.profile,
+        '--dsh-version', localDshVersion() || 'next',
+      ];
+      if (server.serviceUnit) args.push('--unit', server.serviceUnit);
+      if (server.bundles) args.push('--bundles', server.bundles);
+      if (payload.sync !== false && !dryRun) args.push('--sync');
+      if (payload.force === true) args.push('--force');
+      if (dryRun) args.push('--dry-run');
+      const link = links.get(host);
+      if (link) link.clearProbe();
+      return streamCommand(request, args, PROVISION_TIMEOUT_MS);
+    },
+  }), 'remote-hosts: provision route');
 
   ctx.effect(() => ctx.connection.fetch.register({
     path: '/api/remote-hosts/update',
