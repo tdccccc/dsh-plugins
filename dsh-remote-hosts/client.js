@@ -198,6 +198,8 @@ window.__ModuleLoader__.load({
       searchPlaceholder: 'Filter by name, ID, SSH host or URL',
       noMatches: 'No hosts match "{query}".',
       drag: 'Drag to reorder',
+      expandCard: 'Expand this host',
+      collapseCard: 'Collapse this host',
       test: 'Test connection',
       testing: 'Testing…',
       testTitle: 'Probe the saved configuration of this host',
@@ -372,6 +374,8 @@ window.__ModuleLoader__.load({
       searchPlaceholder: '按名称、ID、SSH 主机或地址过滤',
       noMatches: '没有匹配“{query}”的主机。',
       drag: '拖动排序',
+      expandCard: '展开该主机',
+      collapseCard: '收起该主机',
       test: '测试连接',
       testing: '测试中…',
       testTitle: '检测该主机已保存的配置',
@@ -763,6 +767,8 @@ window.__ModuleLoader__.load({
       const [query, setQuery] = React.useState('');
       const [dragIndex, setDragIndex] = React.useState(null);
       const [dragOver, setDragOver] = React.useState(null);
+      // key -> explicit open state; saved cards start collapsed, new cards open.
+      const [expanded, setExpanded] = React.useState({});
       // id -> { busy, at, info, update, error } from the last 测试连接 on that card.
       const [tests, setTests] = React.useState({});
       // id -> update state from the Host's cached probe, fetched once per save.
@@ -897,6 +903,13 @@ window.__ModuleLoader__.load({
       // after it has an id the Host knows. This is the same forced probe the
       // overlay uses, without opening the overlay or the tunnel.
       const savedIds = new Set((snapshot.servers || []).map((server) => server.id));
+      const isExpanded = (row) => (
+        expanded[row.key] !== undefined ? expanded[row.key] : !savedIds.has(row.id.trim())
+      );
+      const toggleRow = (row) => setExpanded((current) => ({
+        ...current,
+        [row.key]: !isExpanded(row),
+      }));
       const testHost = async (row) => {
         const id = row.id.trim();
         if (!id) return;
@@ -1058,6 +1071,7 @@ window.__ModuleLoader__.load({
           : null,
         ...visible.map(({ row, index }) => {
           const mode = modeOf(row);
+          const open = isExpanded(row);
           return h('div', {
             className: 'rh-card'
               + (dragIndex === index ? ' rh-dragging' : '')
@@ -1091,10 +1105,18 @@ window.__ModuleLoader__.load({
                 },
                 onDragEnd: () => { setDragIndex(null); setDragOver(null); },
               }, '⋮⋮'),
-              h('span', { className: 'rh-avatar', 'aria-hidden': 'true' }, (row.label.trim() || row.id.trim() || '?').slice(0, 1).toUpperCase()),
-              h('div', { className: 'rh-card-id' },
-                h('span', { className: 'rh-card-title' }, row.label.trim() || row.id.trim() || t('newServer')),
-                h('span', { className: 'rh-card-sub' }, summaryOf(row))),
+              h('button', {
+                type: 'button',
+                className: 'rh-card-toggle',
+                'aria-expanded': open ? 'true' : 'false',
+                title: open ? t('collapseCard') : t('expandCard'),
+                onClick: () => toggleRow(row),
+              },
+                h('span', { className: 'rh-chevron', 'aria-hidden': 'true' }, open ? '▾' : '▸'),
+                h('span', { className: 'rh-avatar', 'aria-hidden': 'true' }, (row.label.trim() || row.id.trim() || '?').slice(0, 1).toUpperCase()),
+                h('span', { className: 'rh-card-id' },
+                  h('span', { className: 'rh-card-title' }, row.label.trim() || row.id.trim() || t('newServer')),
+                  h('span', { className: 'rh-card-sub' }, summaryOf(row)))),
               h('div', { className: 'rh-card-actions' },
                 h('button', {
                   type: 'button',
@@ -1120,6 +1142,7 @@ window.__ModuleLoader__.load({
                   title: t('remove'), 'aria-label': t('remove'), onClick: () => removeRow(index),
                 }, '×')))
             ,
+            open ? h(React.Fragment, null,
             h('div', { className: 'rh-segment', role: 'group', 'aria-label': t('connectionMode') },
               h('button', {
                 type: 'button', className: mode === 'ssh' ? 'rh-seg-on' : '', disabled: busy,
@@ -1184,6 +1207,7 @@ window.__ModuleLoader__.load({
                       onChange: (event) => patchRow(index, 'sshOptions', event.target.value),
                     })))
                 : null)
+            ) : null
           );
         }),
         draft.length > 0 && visible.length === 0
@@ -1215,6 +1239,9 @@ window.__ModuleLoader__.load({
 .dsh-remote-hosts-settings .rh-card-head{display:flex;align-items:center;gap:10px;min-width:0}
 .dsh-remote-hosts-settings .rh-avatar{flex:0 0 auto;width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:var(--dsw-alias-bg-layer-2);font-size:13px;font-weight:600}
 .dsh-remote-hosts-settings .rh-card-id{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.dsh-remote-hosts-settings .rh-card-toggle{flex:1 1 auto;display:flex;align-items:center;gap:10px;min-width:0;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.dsh-remote-hosts-settings .rh-card-toggle:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;border-radius:8px}
+.dsh-remote-hosts-settings .rh-chevron{flex:0 0 auto;width:10px;font-size:10px;line-height:1;text-align:center;color:var(--dsw-alias-label-secondary);opacity:.7}
 .dsh-remote-hosts-settings .rh-card-title{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsh-remote-hosts-settings .rh-card-sub{font-size:12px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsh-remote-hosts-settings .rh-card-actions{flex:0 0 auto;display:flex;gap:2px;align-items:center}

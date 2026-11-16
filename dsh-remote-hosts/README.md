@@ -144,6 +144,8 @@ connected until the plugin unloads.
 
 In the app the same settings are a compact card list:
 
+- a saved card starts collapsed; click its title or chevron to expand the fields,
+  and a new card starts expanded;
 - a card is added with one click and needs only a name plus **SSH-managed**
   host or **Direct URL**; the ID is derived from the name (or the target) when
   left empty, a derived ID that is already taken gets `-2`, `-3`, … and a
