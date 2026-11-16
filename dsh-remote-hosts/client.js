@@ -160,6 +160,9 @@ window.__ModuleLoader__.load({
       syncPatch: 'Profile patch',
       badSourceProfile: 'Source profile may contain letters, digits, . _ - only.',
       badSyncKeys: 'Keys may contain letters, digits and _ only, and must not start with a digit.',
+      tokenPattern: 'Token pattern',
+      tokenPatternPlaceholder: 'token=([A-Za-z0-9_-]+)',
+      badTokenPattern: 'Token pattern must be a valid regular expression on one line.',
       bundles: 'Provision bundles',
       bundlesPlaceholder: 'dsh-context@0.78.0 … (optional)',
       badBundles: 'Bundle specs may contain letters, digits, @ / . _ : + - only.',
@@ -327,6 +330,9 @@ window.__ModuleLoader__.load({
       syncPatch: 'profile patch',
       badSourceProfile: '来源 profile 只能包含字母、数字和 . _ -。',
       badSyncKeys: 'key 只能包含字母、数字和 _，且不能以数字开头。',
+      tokenPattern: 'Token 匹配',
+      tokenPatternPlaceholder: 'token=([A-Za-z0-9_-]+)',
+      badTokenPattern: 'Token 匹配必须是单行有效正则。',
       bundles: '部署时安装的 bundles',
       bundlesPlaceholder: 'dsh-context@0.78.0 …（可选）',
       badBundles: 'bundle 规格只能包含字母、数字和 @ / . _ : + -。',
@@ -509,6 +515,7 @@ window.__ModuleLoader__.load({
         syncKeys: textOf(row.syncKeys),
         syncAgents: row.syncAgents !== false,
         syncPatch: row.syncPatch !== false,
+        tokenPattern: textOf(row.tokenPattern),
         bundles: textOf(row.bundles),
         sidebar: row.sidebar !== false,
         // Draft-only: the mode picks which side is saved, while both address
@@ -683,6 +690,11 @@ window.__ModuleLoader__.load({
           if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(where + t('badSyncKeys'));
         }
         const syncKeys = syncKeyList.join(',');
+        const tokenPattern = row.tokenPattern.trim();
+        if (tokenPattern) {
+          if (tokenPattern.length > 200 || /[\r\n]/.test(tokenPattern)) throw new Error(where + t('badTokenPattern'));
+          try { new RegExp(tokenPattern); } catch { throw new Error(where + t('badTokenPattern')); }
+        }
         const bundles = row.bundles.trim();
         if (bundles) {
           for (const spec of bundles.split(/\s+/)) {
@@ -701,6 +713,7 @@ window.__ModuleLoader__.load({
         if (syncKeys) value.syncKeys = syncKeys;
         if (row.syncAgents === false) value.syncAgents = false;
         if (row.syncPatch === false) value.syncPatch = false;
+        if (tokenPattern) value.tokenPattern = tokenPattern;
         if (bundles) value.bundles = bundles;
         if (row.sidebar === false) value.sidebar = false;
         values.push(value);
@@ -1100,6 +1113,7 @@ window.__ModuleLoader__.load({
                 textField(index, row, 'id', t('idOptional'), { placeholder: t('idPlaceholder') }),
                 mode === 'ssh' ? textField(index, row, 'localPort', t('localPort'), { placeholder: t('localPortPlaceholder'), numeric: true }) : null,
                 mode === 'ssh' ? textField(index, row, 'remoteLog', t('remoteLog'), { placeholder: t('remoteLogPlaceholder') }) : null,
+                mode === 'ssh' ? textField(index, row, 'tokenPattern', t('tokenPattern'), { placeholder: t('tokenPatternPlaceholder') }) : null,
                 mode === 'ssh' ? textField(index, row, 'bundles', t('bundles'), { placeholder: t('bundlesPlaceholder') }) : null),
               mode === 'ssh'
                 ? h('div', { className: 'rh-fields' },

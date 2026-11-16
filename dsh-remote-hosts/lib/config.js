@@ -55,6 +55,13 @@ export function toServer(row) {
   const rawSource = typeof row.syncSourceProfile === 'string' ? row.syncSourceProfile.trim() : '';
   const syncSourceProfile = isProfileName(rawSource) ? rawSource : 'desktop';
   const syncKeys = typeof row.syncKeys === 'string' ? row.syncKeys.trim().slice(0, 500) : '';
+  // The log line that carries the launch token. An invalid pattern falls back
+  // to the default instead of breaking login; the proxy applies the same rule.
+  const rawToken = typeof row.tokenPattern === 'string' ? row.tokenPattern.trim().slice(0, 200) : '';
+  let tokenPattern = '';
+  if (rawToken && !/[\r\n]/.test(rawToken)) {
+    try { new RegExp(rawToken); tokenPattern = rawToken; } catch {}
+  }
   // Space-separated package specs installed on first provisioning; the script
   // validates each spec again before touching the remote profile.
   const bundles = typeof row.bundles === 'string' ? row.bundles.trim().slice(0, 500) : '';
@@ -74,6 +81,7 @@ export function toServer(row) {
     syncKeys,
     syncAgents: row.syncAgents !== false,
     syncPatch: row.syncPatch !== false,
+    tokenPattern,
     bundles,
     // Sidebar visibility is a config choice so a configured host can stay out
     // of the left column without being deleted.

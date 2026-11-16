@@ -101,6 +101,13 @@ test('settings sync defaults to desktop, all keys and both files', () => {
   assert.equal(toServer({ id: 'gpu3', sshHost: 'user@gpu-1', profile: '..' }).profile, 'web');
 });
 
+test('the token pattern falls back when invalid', () => {
+  assert.equal(toServer({ id: 'x', sshHost: 'host' }).tokenPattern, '');
+  assert.equal(toServer({ id: 'x', sshHost: 'host', tokenPattern: 'auth=([a-z]+)' }).tokenPattern, 'auth=([a-z]+)');
+  assert.equal(toServer({ id: 'x', sshHost: 'host', tokenPattern: '(' }).tokenPattern, '');
+  assert.equal(toServer({ id: 'x', sshHost: 'host', tokenPattern: 'a\nb' }).tokenPattern, '');
+});
+
 test('provision bundles stay a trimmed string', () => {
   assert.equal(toServer({ id: 'x', sshHost: 'host', bundles: ' dsh-context@0.78.0 ' }).bundles, 'dsh-context@0.78.0');
   assert.equal(toServer({ id: 'y', sshHost: 'host' }).bundles, '');

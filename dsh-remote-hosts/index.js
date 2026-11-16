@@ -61,6 +61,8 @@ export const Config = Schema.object({
     syncKeys: Schema.string().default(''),
     syncAgents: Schema.boolean().default(true),
     syncPatch: Schema.boolean().default(true),
+    // POSIX ERE read from the remote log; the first capture group is the token.
+    tokenPattern: Schema.string().default(''),
     // Space-separated dsh profile bundles installed by the provision action.
     bundles: Schema.string().default(''),
     sidebar: Schema.boolean().default(true),
@@ -98,6 +100,7 @@ export const Config = Schema.object({
       syncKeys: 'Comma- or space-separated credential keys to copy; empty copies every top-level key in ~/.dsh/.credentials.yaml.',
       syncAgents: 'Copy ~/.dsh/AGENTS.md to the remote profile (default true).',
       syncPatch: 'Copy the source profile patch layer to the remote profile (default true).',
+      tokenPattern: 'POSIX ERE that finds the launch token in the remote log; the first capture group is the token. Empty uses token=([A-Za-z0-9_-]+).',
       bundles: 'Space-separated dsh profile bundles provisioned with the host, for example "@deepseek-ai/dsh-experimental-plugin-market-bundle dsh-context@0.78.0".',
       sidebar: 'Show this host as a row in the left sidebar. Hidden hosts stay configured and can be opened from the plugin settings or the overlay switcher.',
     },
@@ -123,6 +126,7 @@ export const Config = Schema.object({
       syncKeys: '要同步的凭据 key，逗号或空格分隔；留空同步 ~/.dsh/.credentials.yaml 中所有顶层 key。',
       syncAgents: '把 ~/.dsh/AGENTS.md 同步到远端 profile（默认开启）。',
       syncPatch: '把来源 profile 的 patch 层同步到远端 profile（默认开启）。',
+      tokenPattern: '从远端日志中提取登录 token 的 POSIX ERE，第一个捕获组是 token；留空使用 token=([A-Za-z0-9_-]+)。',
       bundles: '首次部署时安装的 dsh profile bundles，空格分隔，例如 "@deepseek-ai/dsh-experimental-plugin-market-bundle dsh-context@0.78.0"。',
       sidebar: '在左侧栏显示该主机。隐藏后配置仍然保留，可从插件设置或浮层切换器打开。',
     },
@@ -346,6 +350,7 @@ class ServerLink {
       sshHost: server.sshHost,
       remotePort: server.remotePort,
       remoteLog: server.remoteLog,
+      tokenPattern: server.tokenPattern,
       upstreamPort: () => (this.tunnel ? this.tunnel.localPort : 0),
     });
   }
@@ -537,7 +542,8 @@ export function apply(ctx, config) {
     && link.server.serviceKind === server.serviceKind
     && link.server.serviceUnit === server.serviceUnit
     && link.server.profile === server.profile
-    && link.server.updateChannel === server.updateChannel;
+    && link.server.updateChannel === server.updateChannel
+    && link.server.tokenPattern === server.tokenPattern;
 
   // The server list lives in volatile settings, so it can change without this
   // plugin being remounted. Reconcile creates, replaces, and stops links to

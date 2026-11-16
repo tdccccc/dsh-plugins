@@ -40,7 +40,8 @@ instances is managed.
 A row with `sshHost` is fully managed: one
 `ssh -N -L 127.0.0.1:<local>:127.0.0.1:<remotePort>` tunnel per endpoint and an
 auth-injecting proxy on a free loopback port. The proxy reads the launch token
-from the remote log over SSH, logs in, and attaches the cookie itself. It only
+from the remote log over SSH (using the row's `tokenPattern`, default
+`token=([A-Za-z0-9_-]+)`), logs in, and attaches the cookie itself. It only
 listens on 127.0.0.1 and refuses non-loopback Hosts, foreign Origins and
 cross-site requests; frame navigation is the one allowed cross-site shape
 because the desktop shell page runs on the `dsh-app://` scheme. Cross-site
@@ -112,6 +113,7 @@ dsh-remote-hosts → Configure**, or in the profile patch:
 | `remotePort` | Remote dsh web port, default 27993. |
 | `localPort` | Fixed local tunnel port; 0 picks a free one. Must be unique when set. |
 | `remoteLog` | Remote log the login token is read from; defaults to `~/.dsh/web-<remotePort>.log`. |
+| `tokenPattern` | POSIX ERE that finds the launch token in that log; the first capture group is the token. Empty uses `token=([A-Za-z0-9_-]+)`. |
 | `serviceKind` | `systemd-user` (default for ssh rows), `launchd-user`, `command`, or `external`. |
 | `serviceUnit` | systemd unit or launchd label; defaults to `dsh-web` for the managed kinds. |
 | `profile` | Remote profile directory under `~/.dsh/profiles`; default `web`. |

@@ -14,6 +14,21 @@ const RETRY_DELAYS = [2000, 4000, 8000, 15000, 30000];
 const LOGIN_TIMEOUT = 15000;
 const TOKEN_TIMEOUT = 15000;
 const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+// The remote log line that carries the launch token. The first capture group
+// is the token; a pattern without one uses the whole match. POSIX ERE because
+// the remote side reads it with grep -E.
+export const DEFAULT_TOKEN_PATTERN = 'token=([A-Za-z0-9_-]+)';
+
+export function extractToken(text, pattern = DEFAULT_TOKEN_PATTERN) {
+  const source = String(pattern || DEFAULT_TOKEN_PATTERN);
+  const matched = String(text || '').trim();
+  if (!matched) return '';
+  let regex;
+  try { regex = new RegExp(source); } catch { return ''; }
+  const match = regex.exec(matched);
+  if (!match) return '';
+  return String(match[1] || match[0] || '').trim();
+}
 
 export function isLoopbackHost(value) {
   const host = String(value || '').trim().toLowerCase();
@@ -179,6 +194,7 @@ export class Proxy {
     this.sshHost = String(options.sshHost || '');
     this.remotePort = Number(options.remotePort) || 27993;
     this.remoteLog = String(options.remoteLog || '');
+    this.tokenPattern = String(options.tokenPattern || '');
     this.upstreamHost = String(options.upstreamHost || '127.0.0.1');
     this.upstreamPortOption = options.upstreamPort || 0;
     this.readTokenOverride = typeof options.readToken === 'function' ? options.readToken : null;
@@ -313,7 +329,8 @@ export class Proxy {
   readToken() {
     if (this.readTokenOverride) return Promise.resolve().then(() => this.readTokenOverride());
     const log = this.remoteLog || '~/.dsh/web-' + this.remotePort + '.log';
-    const command = "grep -oE 'token=[A-Za-z0-9_-]+' " + remotePath(log) + ' | tail -1';
+    const pattern = this.tokenPattern || DEFAULT_TOKEN_PATTERN;
+    const command = 'grep -oE ' + shellQuote(pattern) + ' ' + remotePath(log) + ' | tail -1';
     return new Promise((resolve, reject) => {
       execFile('ssh', ['-o', 'BatchMode=yes', this.sshHost, command], { timeout: TOKEN_TIMEOUT, maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {
         if (error) {
@@ -321,9 +338,7 @@ export class Proxy {
           reject(new Error('could not read the launch token: ' + detail));
           return;
         }
-        const text = String(stdout || '').trim();
-        const at = text.lastIndexOf('token=');
-        const value = at === -1 ? '' : text.slice(at + 6).trim();
+        const value = extractToken(stdout, pattern);
         if (!value) {
           reject(new Error('no launch token in ' + log));
           return;
