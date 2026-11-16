@@ -7,7 +7,7 @@ import { configuredServers } from './lib/config.js';
 import { recentSessions, sessionWindowMinutes } from './lib/sessions.js';
 import { updateState } from './lib/update.js';
 import { Tunnel } from './lib/tunnel.js';
-import { Proxy } from './lib/proxy.js';
+import { Proxy, checkRequest } from './lib/proxy.js';
 
 // Host half: one ssh tunnel and auth-injecting proxy per configured remote host,
 // a status route for the browser half, and the sync route that runs
@@ -144,6 +144,28 @@ async function readJson(request) {
   } catch {
     return null;
   }
+}
+
+// The platform already admits only authenticated browser sessions under
+// /api, but the handler is the second fence and must not rely on that alone.
+// The rules match the proxy: loopback Host, no foreign Origin, no cross-site
+// request (not even a frame navigation), and JSON for anything with a body.
+function apiRefusal(request) {
+  const headers = {};
+  for (const [name, value] of request.headers) headers[name] = value;
+  if (!headers.host) {
+    try { headers.host = new URL(request.url).host; } catch {}
+  }
+  if (!headers.host) return 'loopback host required';
+  const site = String(headers['sec-fetch-site'] || '').toLowerCase();
+  if (site === 'cross-site') return 'cross-site request refused';
+  const refused = checkRequest(headers);
+  if (refused) return refused;
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    const type = String(headers['content-type'] || '').toLowerCase();
+    if (!type.startsWith('application/json')) return 'application/json required';
+  }
+  return null;
 }
 
 // The Host half runs inside the dsh process that owns this machine's profile,
@@ -744,7 +766,11 @@ export function apply(ctx, config) {
     path: '/api/remote-hosts/status',
     methods: ['GET'],
     requestBody: 'buffered',
-    fetch: () => Promise.resolve(jsonResponse({ ok: true, localVersion: appVersion(), servers: describe() })),
+    fetch: (request) => {
+      const refused = apiRefusal(request);
+      if (refused) return Promise.resolve(jsonResponse({ ok: false, error: 'refused: ' + refused }, 403));
+      return Promise.resolve(jsonResponse({ ok: true, localVersion: appVersion(), servers: describe() }));
+    },
   }), 'remote-hosts: status route');
 
   // Opening a host is the only thing that starts its tunnel. active:false means
@@ -754,6 +780,8 @@ export function apply(ctx, config) {
     methods: ['POST'],
     requestBody: 'buffered',
     fetch: async (request) => {
+      const refused = apiRefusal(request);
+      if (refused) return jsonResponse({ ok: false, error: 'refused: ' + refused }, 403);
       const payload = await readJson(request);
       if (!payload) return jsonResponse({ ok: false, error: 'bad json' }, 400);
       const host = String(payload.host || '');
@@ -777,6 +805,8 @@ export function apply(ctx, config) {
     methods: ['POST'],
     requestBody: 'buffered',
     fetch: async (request) => {
+      const refused = apiRefusal(request);
+      if (refused) return jsonResponse({ ok: false, error: 'refused: ' + refused }, 403);
       const payload = await readJson(request);
       if (!payload) return jsonResponse({ ok: false, error: 'bad json' }, 400);
       const id = String(payload.host || '');
@@ -795,6 +825,8 @@ export function apply(ctx, config) {
     methods: ['POST'],
     requestBody: 'buffered',
     fetch: async (request) => {
+      const refused = apiRefusal(request);
+      if (refused) return jsonResponse({ ok: false, error: 'refused: ' + refused }, 403);
       const payload = await readJson(request);
       if (!payload) return jsonResponse({ ok: false, error: 'bad json' }, 400);
       const host = String(payload.host || '');
@@ -840,6 +872,8 @@ export function apply(ctx, config) {
     methods: ['POST'],
     requestBody: 'buffered',
     fetch: async (request) => {
+      const refused = apiRefusal(request);
+      if (refused) return jsonResponse({ ok: false, error: 'refused: ' + refused }, 403);
       const payload = await readJson(request);
       if (!payload) return jsonResponse({ ok: false, error: 'bad json' }, 400);
       const host = String(payload.host || '');
@@ -881,6 +915,8 @@ export function apply(ctx, config) {
     methods: ['POST'],
     requestBody: 'buffered',
     fetch: async (request) => {
+      const refused = apiRefusal(request);
+      if (refused) return jsonResponse({ ok: false, error: 'refused: ' + refused }, 403);
       const payload = await readJson(request);
       if (!payload) return jsonResponse({ ok: false, error: 'bad json' }, 400);
       const host = String(payload.host || '');
@@ -924,6 +960,8 @@ export function apply(ctx, config) {
     methods: ['POST'],
     requestBody: 'buffered',
     fetch: async (request) => {
+      const refused = apiRefusal(request);
+      if (refused) return jsonResponse({ ok: false, error: 'refused: ' + refused }, 403);
       const payload = await readJson(request);
       if (!payload) return jsonResponse({ ok: false, error: 'bad json' }, 400);
       const host = String(payload.host || '');
@@ -945,6 +983,8 @@ export function apply(ctx, config) {
     methods: ['POST'],
     requestBody: 'buffered',
     fetch: async (request) => {
+      const refused = apiRefusal(request);
+      if (refused) return jsonResponse({ ok: false, error: 'refused: ' + refused }, 403);
       const payload = await readJson(request);
       if (!payload) return jsonResponse({ ok: false, error: 'bad json' }, 400);
       const host = String(payload.host || '');
@@ -982,6 +1022,8 @@ export function apply(ctx, config) {
     methods: ['POST'],
     requestBody: 'buffered',
     fetch: async (request) => {
+      const refused = apiRefusal(request);
+      if (refused) return jsonResponse({ ok: false, error: 'refused: ' + refused }, 403);
       const payload = await readJson(request);
       if (!payload) return jsonResponse({ ok: false, error: 'bad json' }, 400);
       const host = String(payload.host || '');

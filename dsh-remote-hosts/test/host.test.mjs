@@ -115,6 +115,35 @@ test('a managed host stays dormant until the browser activates it', async () => 
   }
 });
 
+test('api routes refuse foreign hosts, origins, cross-site and non-json bodies', async () => {
+  const host = await setup({ servers: [] });
+  try {
+    const status = host.routes.get('/api/remote-hosts/status');
+    const foreignHost = await status.fetch(new Request('http://example.com/api/remote-hosts/status'));
+    assert.equal(foreignHost.status, 403);
+    const foreignOrigin = await status.fetch(new Request('http://127.0.0.1/api/remote-hosts/status', {
+      headers: { origin: 'http://example.com' },
+    }));
+    assert.equal(foreignOrigin.status, 403);
+
+    const probe = host.routes.get('/api/remote-hosts/probe');
+    const textBody = await probe.fetch(new Request('http://127.0.0.1/api/remote-hosts/probe', {
+      method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{}',
+    }));
+    assert.equal(textBody.status, 403);
+    const crossSite = await probe.fetch(new Request('http://127.0.0.1/api/remote-hosts/probe', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' }, body: JSON.stringify({ host: 'x' }),
+    }));
+    assert.equal(crossSite.status, 403);
+    const loopbackOrigin = await probe.fetch(new Request('http://127.0.0.1/api/remote-hosts/probe', {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:9999' }, body: JSON.stringify({ host: 'nope' }),
+    }));
+    assert.equal(loopbackOrigin.status, 400);
+  } finally {
+    await host.dispose();
+  }
+});
+
 test('a second action on the same host is refused while one runs', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-hosts-'));
   const bin = join(dir, 'bin');

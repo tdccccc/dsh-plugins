@@ -60,9 +60,13 @@ A fixed `localPort` must be unique across rows; duplicates are reported in the
 row status instead of letting the second tunnel fail to bind.
 
 All Host routes live under `/api/remote-hosts/`: `status`, `activate`,
-`reconnect`, `sync`, `update`, `probe`, `service` and `logs`. The platform requires a live
-browser session for that prefix, which is what stops other local processes from
-triggering a sync, update or service restart.
+`reconnect`, `sync`, `update`, `probe`, `service`, `provision` and `logs`. The
+platform requires a live browser session for that prefix, which is what stops
+other local processes from triggering a sync, update or service restart. Each
+handler then re-checks the request itself: the Host must be loopback, an attached
+Origin must be loopback or the same authority, `sec-fetch-site: cross-site` is
+refused (frame navigation included), and a request with a body must be
+`application/json`. A refusal is a 403 before any route logic runs.
 
 ## Configuration
 
