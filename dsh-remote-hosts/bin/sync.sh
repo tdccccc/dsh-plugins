@@ -5,14 +5,17 @@
 #   bin/sync.sh user@host --restart  # copy, then restart the remote dsh-web unit
 #   bin/sync.sh user@host --dry-run  # show the plan
 #
+# What travels and where it comes from:
+#   --source-profile NAME  local profile under ~/.dsh/profiles (default desktop)
+#   --keys "A,B"           credential keys to copy; empty copies every top-level key
+#   --no-agents            skip ~/.dsh/AGENTS.md
+#   --no-patch             skip the source profile patch layer
+#
 # A managed row can point at another service shape:
 #   --profile NAME   remote dsh profile directory (default web)
 #   --unit NAME      systemd unit or launchd label (default dsh-web)
 #   --kind KIND      systemd-user | launchd-user | command | external
 #   --port N         remote dsh web port used by the restart health check
-#
-# What travels: ~/.dsh/AGENTS.md, the profile patch layer (desktop -> web),
-# and the provider API keys that layer references.
 #
 # Progress goes to stdout; failures go to stderr so the plugin can show them.
 set -eu
@@ -21,7 +24,7 @@ say() { printf '%s\n' "$*"; }
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
 if [ $# -lt 1 ]; then
-  printf 'usage: sync.sh <ssh-host> [--restart] [--dry-run] [--profile NAME] [--unit NAME] [--kind KIND] [--port N]\n' >&2
+  printf 'usage: sync.sh <ssh-host> [--restart] [--dry-run] [--profile NAME] [--source-profile NAME] [--keys A,B] [--no-agents] [--no-patch] [--unit NAME] [--kind KIND] [--port N]\n' >&2
   exit 2
 fi
 HOST=$1
@@ -29,6 +32,10 @@ shift
 RESTART=0
 DRY=0
 PROFILE=web
+SOURCE_PROFILE=desktop
+SYNC_KEYS=
+COPY_AGENTS=1
+COPY_PATCH=1
 UNIT=dsh-web
 KIND=systemd-user
 PORT=27993
@@ -37,6 +44,10 @@ while [ $# -gt 0 ]; do
     --restart) RESTART=1 ;;
     --dry-run) DRY=1 ;;
     --profile) shift; PROFILE=${1:?"--profile needs a value"} ;;
+    --source-profile) shift; SOURCE_PROFILE=${1:?"--source-profile needs a value"} ;;
+    --keys) shift; SYNC_KEYS=${1:?"--keys needs a value"} ;;
+    --no-agents) COPY_AGENTS=0 ;;
+    --no-patch) COPY_PATCH=0 ;;
     --unit) shift; UNIT=${1:?"--unit needs a value"} ;;
     --kind) shift; KIND=${1:?"--kind needs a value"} ;;
     --port) shift; PORT=${1:?"--port needs a value"} ;;
@@ -45,18 +56,41 @@ while [ $# -gt 0 ]; do
   shift
 done
 # Values are interpolated into rsync/ssh arguments below; keep them plain.
-case "$PROFILE" in *[!A-Za-z0-9._-]*) die "bad profile: $PROFILE" ;; esac
+case "$PROFILE" in ''|.|..|*[!A-Za-z0-9._-]*) die "bad profile: $PROFILE" ;; esac
+case "$SOURCE_PROFILE" in ''|.|..|*[!A-Za-z0-9._-]*) die "bad source profile: $SOURCE_PROFILE" ;; esac
+# Key filters are names, not values: split on commas and spaces, then reject
+# anything that could not be an environment name. Empty means every key.
+KEYS_WANTED=
+if [ -n "$SYNC_KEYS" ]; then
+  set -f
+  for key in $(printf '%s' "$SYNC_KEYS" | tr ',' ' '); do
+    case "$key" in
+      ''|[0-9]*|*[!A-Za-z0-9_]*) die "bad key: $key" ;;
+    esac
+    KEYS_WANTED="$KEYS_WANTED $key"
+  done
+  set +f
+fi
 case "$UNIT" in *[!A-Za-z0-9@._:-]*) die "bad unit: $UNIT" ;; esac
 case "$KIND" in systemd-user|launchd-user|command|external) ;; *) die "bad kind: $KIND" ;; esac
 case "$PORT" in ''|*[!0-9]*) die "bad port: $PORT" ;; esac
 
-LOCAL_PATCH="$HOME/.dsh/profiles/desktop/cordis.patch.yml"
-[ -f "$LOCAL_PATCH" ] || die "missing $LOCAL_PATCH"
+LOCAL_PROFILE="$HOME/.dsh/profiles/$SOURCE_PROFILE"
+LOCAL_PATCH="$LOCAL_PROFILE/cordis.patch.yml"
+if [ "$COPY_PATCH" = 1 ]; then
+  [ -f "$LOCAL_PATCH" ] || die "missing $LOCAL_PATCH"
+fi
+if [ "$COPY_AGENTS" = 1 ]; then
+  [ -f "$HOME/.dsh/AGENTS.md" ] || die "missing $HOME/.dsh/AGENTS.md"
+fi
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# Cut the desktop patch into top-level entries. An entry starts with "- " in
+PATCH_LINES=0
+skipped=0
+if [ "$COPY_PATCH" = 1 ]; then
+# Cut the source profile patch into top-level entries. An entry starts with "- " in
 # column one and owns every following line until the next one.
 #   - insert: lists plugins installed on this machine; the remote host usually
 #     has none of them, so those entries are skipped and counted.
@@ -99,16 +133,26 @@ awk -v skip_id=ui-settings-account -v count_file="$TMP/skipped" '
   printf '%s\n' '    welcomeNoticeVersion: 2026-09-28.1'
   cat "$TMP/patch.yml"
 } > "$TMP/web-patch.yml"
+PATCH_LINES=$(wc -l < "$TMP/web-patch.yml" | tr -d ' ')
+skipped=$(cat "$TMP/skipped" 2>/dev/null || echo 0)
+fi
 
-# Copy every provider key the local credentials file declares at the top level,
-# so a new provider does not need a sync.sh edit. Two-space keys are the flat
-# credential layout; nested 0.2 records are left to the remote app.
+# Copy the selected provider keys from the local credentials file. Empty means
+# every top-level key the file declares; nested 0.2 records stay behind.
+# Two-space keys are the flat credential layout.
 KEYS=""
 if [ -f "$HOME/.dsh/.credentials.yaml" ]; then
   while IFS= read -r line; do
     name=${line%%:*}
     name=${name#  }
     [ -n "$name" ] || continue
+    if [ -n "$KEYS_WANTED" ]; then
+      wanted=0
+      for key in $KEYS_WANTED; do
+        if [ "$key" = "$name" ]; then wanted=1; break; fi
+      done
+      [ "$wanted" = 1 ] || continue
+    fi
     value=${line#*:}
     value=$(printf '%s' "$value" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
     [ -n "$value" ] || continue
@@ -121,22 +165,39 @@ fi
 printf '%s' "$KEYS" > "$TMP/remote.env"
 
 keys=$(grep -c '=' "$TMP/remote.env" 2>/dev/null || true)
-skipped=$(cat "$TMP/skipped" 2>/dev/null || echo 0)
+PATCH_LABEL=skipped
+if [ "$COPY_PATCH" = 1 ]; then PATCH_LABEL="$PATCH_LINES lines"; fi
+AGENTS_LABEL=skipped
+if [ "$COPY_AGENTS" = 1 ]; then AGENTS_LABEL=yes; fi
+KEYS_LABEL="${keys:-0} all"
+if [ -n "$KEYS_WANTED" ]; then KEYS_LABEL="${keys:-0} selected"; fi
 
 say "== $HOST =="
-say "   patch:  $(wc -l < "$TMP/web-patch.yml" | tr -d ' ') lines"
-say "   keys:   ${keys:-0}"
-say "   insert: ${skipped:-0} skipped (not installed on the remote)"
+say "   source: $SOURCE_PROFILE"
+say "   patch:  $PATCH_LABEL"
+say "   agents: $AGENTS_LABEL"
+say "   keys:   $KEYS_LABEL"
+if [ "$COPY_PATCH" = 1 ]; then
+  say "   insert: ${skipped:-0} skipped (not installed on the remote)"
+fi
 
-if [ -n "${PRINT_PATCH:-}" ]; then cat "$TMP/web-patch.yml"; fi
+if [ "$COPY_PATCH" = 1 ] && [ -n "${PRINT_PATCH:-}" ]; then cat "$TMP/web-patch.yml"; fi
 
 if [ "$DRY" = 1 ]; then
-  say "   [dry-run] would copy AGENTS.md, profile patch, keys"
+  PLAN=
+  if [ "$COPY_AGENTS" = 1 ]; then PLAN="$PLAN AGENTS.md"; fi
+  if [ "$COPY_PATCH" = 1 ]; then PLAN="$PLAN profile patch"; fi
+  PLAN="$PLAN keys"
+  say "   [dry-run] would copy:$PLAN"
   exit 0
 fi
 
-rsync -az "$HOME/.dsh/AGENTS.md" "$HOST:.dsh/AGENTS.md"
-rsync -az "$TMP/web-patch.yml" "$HOST:.dsh/profiles/$PROFILE/cordis.patch.yml"
+if [ "$COPY_AGENTS" = 1 ]; then
+  rsync -az "$HOME/.dsh/AGENTS.md" "$HOST:.dsh/AGENTS.md"
+fi
+if [ "$COPY_PATCH" = 1 ]; then
+  rsync -az "$TMP/web-patch.yml" "$HOST:.dsh/profiles/$PROFILE/cordis.patch.yml"
+fi
 rsync -az "$TMP/remote.env" "$HOST:.dsh/remote.env"
 ssh "$HOST" 'chmod 600 ~/.dsh/remote.env'
 

@@ -34,6 +34,9 @@ test('scripts reject bad arguments before touching ssh', async () => {
     [[script('remote.sh'), 'host', 'service', 'explode'], /bad service action/],
     [[script('remote.sh'), 'host', 'logs', '--sessions-window', '30'], /not valid for logs/],
     [[script('remote.sh'), 'host', 'probe', '--follow'], /not valid for probe/],
+    [[script('sync.sh'), 'host', '--keys', 'A-B'], /bad key/],
+    [[script('sync.sh'), 'host', '--source-profile', '..'], /bad source profile/],
+    [[script('sync.sh'), 'host', '--source-profile', 'bad/name'], /bad source profile/],
     [[script('remote.sh'), 'host', 'probe', '--sessions-window', 'zero'], /bad session window/],
     [[script('provision.sh')], /usage/],
     [[script('provision.sh'), 'host', '--port', 'abc'], /bad port/],
@@ -46,6 +49,37 @@ test('scripts reject bad arguments before touching ssh', async () => {
     const result = await run(args);
     assert.notEqual(result.code, 0, args.join(' '));
     assert.match(result.stderr, pattern, args.join(' '));
+  }
+});
+
+test('settings sync selects its source and keys', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-hosts-'));
+  try {
+    const home = join(dir, 'home');
+    mkdirSync(join(home, '.dsh', 'profiles', 'desktop'), { recursive: true });
+    writeFileSync(join(home, '.dsh', 'profiles', 'desktop', 'cordis.patch.yml'), '- id: demo\n  config:\n    x: 1\n');
+    writeFileSync(join(home, '.dsh', 'AGENTS.md'), 'agents\n');
+    writeFileSync(join(home, '.dsh', '.credentials.yaml'), '  KEY_A: a\n  KEY_B: b\n  KEY_C: c\n');
+    const env = { ...process.env, HOME: home };
+    const selected = await run([script('sync.sh'), 'demo', '--dry-run', '--keys', 'KEY_A,KEY_C'], { env });
+    assert.equal(selected.code, 0, selected.stderr);
+    assert.match(selected.stdout, /source: desktop/);
+    assert.match(selected.stdout, /keys:   2 selected/);
+    assert.match(selected.stdout, /would copy: AGENTS\.md profile patch keys/);
+    const fewer = await run([script('sync.sh'), 'demo', '--dry-run', '--no-agents', '--no-patch', '--keys', 'KEY_A'], { env });
+    assert.equal(fewer.code, 0, fewer.stderr);
+    assert.match(fewer.stdout, /patch:  skipped/);
+    assert.match(fewer.stdout, /agents: skipped/);
+    assert.match(fewer.stdout, /keys:   1 selected/);
+    assert.match(fewer.stdout, /would copy: keys/);
+    const all = await run([script('sync.sh'), 'demo', '--dry-run', '--no-agents', '--no-patch'], { env });
+    assert.equal(all.code, 0, all.stderr);
+    assert.match(all.stdout, /keys:   3 all/);
+    const other = await run([script('sync.sh'), 'demo', '--dry-run', '--source-profile', 'web'], { env });
+    assert.notEqual(other.code, 0);
+    assert.match(other.stderr, /missing .*profiles\/web/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

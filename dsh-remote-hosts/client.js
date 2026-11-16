@@ -147,6 +147,15 @@ window.__ModuleLoader__.load({
       updateChannel: 'Update target',
       updateChannelPlaceholder: 'app version',
       badChannel: 'Update target may contain letters, digits, . _ + - only.',
+      syncSection: 'Settings sync',
+      syncSourceProfile: 'Source profile',
+      syncSourceProfilePlaceholder: 'desktop',
+      syncKeys: 'Keys (comma/space, empty = all)',
+      syncKeysPlaceholder: 'KEY_A, KEY_B',
+      syncAgents: 'AGENTS.md',
+      syncPatch: 'Profile patch',
+      badSourceProfile: 'Source profile may contain letters, digits, . _ - only.',
+      badSyncKeys: 'Keys may contain letters, digits and _ only, and must not start with a digit.',
       bundles: 'Provision bundles',
       bundlesPlaceholder: 'dsh-context@0.78.0 … (optional)',
       badBundles: 'Bundle specs may contain letters, digits, @ / . _ : + - only.',
@@ -304,6 +313,15 @@ window.__ModuleLoader__.load({
       updateChannel: '更新目标',
       updateChannelPlaceholder: '跟随本机',
       badChannel: '更新目标只能包含字母、数字和 . _ + -。',
+      syncSection: '同步内容',
+      syncSourceProfile: '来源 profile',
+      syncSourceProfilePlaceholder: 'desktop',
+      syncKeys: '同步的 key（逗号/空格，留空=全部）',
+      syncKeysPlaceholder: 'KEY_A, KEY_B',
+      syncAgents: 'AGENTS.md',
+      syncPatch: 'profile patch',
+      badSourceProfile: '来源 profile 只能包含字母、数字和 . _ -。',
+      badSyncKeys: 'key 只能包含字母、数字和 _，且不能以数字开头。',
       bundles: '部署时安装的 bundles',
       bundlesPlaceholder: 'dsh-context@0.78.0 …（可选）',
       badBundles: 'bundle 规格只能包含字母、数字和 @ / . _ : + -。',
@@ -482,6 +500,10 @@ window.__ModuleLoader__.load({
         serviceUnit: textOf(row.serviceUnit),
         profile: textOf(row.profile),
         updateChannel: textOf(row.updateChannel),
+        syncSourceProfile: textOf(row.syncSourceProfile),
+        syncKeys: textOf(row.syncKeys),
+        syncAgents: row.syncAgents !== false,
+        syncPatch: row.syncPatch !== false,
         bundles: textOf(row.bundles),
         sidebar: row.sidebar !== false,
         // Draft-only: the mode picks which side is saved, while both address
@@ -642,9 +664,20 @@ window.__ModuleLoader__.load({
         const serviceUnit = row.serviceUnit.trim();
         if (serviceUnit && !UNIT_PATTERN.test(serviceUnit)) throw new Error(where + t('badUnit'));
         const profile = row.profile.trim();
-        if (profile && !PROFILE_PATTERN.test(profile)) throw new Error(where + t('badProfile'));
+        if (profile && (profile === '.' || profile === '..' || !PROFILE_PATTERN.test(profile))) {
+          throw new Error(where + t('badProfile'));
+        }
         const updateChannel = row.updateChannel.trim();
         if (updateChannel && !CHANNEL_PATTERN.test(updateChannel)) throw new Error(where + t('badChannel'));
+        const syncSourceProfile = row.syncSourceProfile.trim();
+        if (syncSourceProfile && (syncSourceProfile === '.' || syncSourceProfile === '..' || !PROFILE_PATTERN.test(syncSourceProfile))) {
+          throw new Error(where + t('badSourceProfile'));
+        }
+        const syncKeyList = row.syncKeys.trim() ? row.syncKeys.trim().split(/[\s,]+/).filter(Boolean) : [];
+        for (const key of syncKeyList) {
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(where + t('badSyncKeys'));
+        }
+        const syncKeys = syncKeyList.join(',');
         const bundles = row.bundles.trim();
         if (bundles) {
           for (const spec of bundles.split(/\s+/)) {
@@ -659,6 +692,10 @@ window.__ModuleLoader__.load({
         if (serviceUnit) value.serviceUnit = serviceUnit;
         if (profile) value.profile = profile;
         if (updateChannel) value.updateChannel = updateChannel;
+        if (syncSourceProfile) value.syncSourceProfile = syncSourceProfile;
+        if (syncKeys) value.syncKeys = syncKeys;
+        if (row.syncAgents === false) value.syncAgents = false;
+        if (row.syncPatch === false) value.syncPatch = false;
         if (bundles) value.bundles = bundles;
         if (row.sidebar === false) value.sidebar = false;
         values.push(value);
@@ -1065,6 +1102,26 @@ window.__ModuleLoader__.load({
                   textField(index, row, 'serviceUnit', t('serviceUnit'), { placeholder: t('serviceUnitPlaceholder') }),
                   textField(index, row, 'profile', t('profile'), { placeholder: t('profilePlaceholder') }),
                   textField(index, row, 'updateChannel', t('updateChannel'), { placeholder: t('updateChannelPlaceholder') }))
+                : null,
+              mode === 'ssh'
+                ? h('div', { className: 'rh-section' }, t('syncSection'))
+                : null,
+              mode === 'ssh'
+                ? h('div', { className: 'rh-fields' },
+                  textField(index, row, 'syncSourceProfile', t('syncSourceProfile'), { placeholder: t('syncSourceProfilePlaceholder') }),
+                  textField(index, row, 'syncKeys', t('syncKeys'), { placeholder: t('syncKeysPlaceholder') }),
+                  h('label', { className: 'rh-check', key: 'syncAgents' },
+                    h('input', {
+                      type: 'checkbox', checked: row.syncAgents !== false, disabled: busy,
+                      onChange: (event) => patchRow(index, 'syncAgents', event.target.checked),
+                    }),
+                    h('span', null, t('syncAgents'))),
+                  h('label', { className: 'rh-check', key: 'syncPatch' },
+                    h('input', {
+                      type: 'checkbox', checked: row.syncPatch !== false, disabled: busy,
+                      onChange: (event) => patchRow(index, 'syncPatch', event.target.checked),
+                    }),
+                    h('span', null, t('syncPatch'))))
                 : null)
           );
         }),
@@ -1118,6 +1175,9 @@ window.__ModuleLoader__.load({
 .dsh-remote-hosts-settings .rh-adv>summary::before{content:'▸';display:inline-block;width:14px}
 .dsh-remote-hosts-settings .rh-adv[open]>summary::before{content:'▾'}
 .dsh-remote-hosts-settings .rh-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:10px}
+.dsh-remote-hosts-settings .rh-section{margin-top:12px;font-size:11.5px;color:var(--dsw-alias-label-secondary)}
+.dsh-remote-hosts-settings .rh-check{display:flex;align-items:center;gap:6px;align-self:end;min-width:0;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer}
+.dsh-remote-hosts-settings .rh-check input{width:auto;margin:0}
 .dsh-remote-hosts-settings .rh-field{display:flex;flex-direction:column;gap:4px;min-width:0}
 .dsh-remote-hosts-settings .rh-field>span{font-size:11.5px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsh-remote-hosts-settings select,.dsh-remote-hosts-settings input:not([type=checkbox]){box-sizing:border-box;min-width:0;width:100%;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px;color:inherit}

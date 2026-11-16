@@ -77,6 +77,30 @@ test('sidebar visibility defaults to true and persists false', () => {
   assert.equal(toServer({ id: 'y', sshHost: 'host', sidebar: true }).sidebar, true);
 });
 
+test('settings sync content is configurable per row', () => {
+  const server = toServer({
+    id: 'gpu', sshHost: 'user@gpu-1',
+    syncSourceProfile: 'desktop',
+    syncKeys: 'KEY_A, KEY_B',
+    syncAgents: false,
+    syncPatch: false,
+  });
+  assert.equal(server.syncSourceProfile, 'desktop');
+  assert.equal(server.syncKeys, 'KEY_A, KEY_B');
+  assert.equal(server.syncAgents, false);
+  assert.equal(server.syncPatch, false);
+});
+
+test('settings sync defaults to desktop, all keys and both files', () => {
+  const server = toServer({ id: 'gpu', sshHost: 'user@gpu-1' });
+  assert.equal(server.syncSourceProfile, 'desktop');
+  assert.equal(server.syncKeys, '');
+  assert.equal(server.syncAgents, true);
+  assert.equal(server.syncPatch, true);
+  assert.equal(toServer({ id: 'gpu2', sshHost: 'user@gpu-1', syncSourceProfile: '..' }).syncSourceProfile, 'desktop');
+  assert.equal(toServer({ id: 'gpu3', sshHost: 'user@gpu-1', profile: '..' }).profile, 'web');
+});
+
 test('provision bundles stay a trimmed string', () => {
   assert.equal(toServer({ id: 'x', sshHost: 'host', bundles: ' dsh-context@0.78.0 ' }).bundles, 'dsh-context@0.78.0');
   assert.equal(toServer({ id: 'y', sshHost: 'host' }).bundles, '');

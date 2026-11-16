@@ -9,6 +9,9 @@ const SERVICE_KINDS = new Set(['systemd-user', 'launchd-user', 'command', 'exter
 const UNIT_PATTERN = /^[A-Za-z0-9@._:-]{1,128}$/;
 const PROFILE_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 const CHANNEL_PATTERN = /^[A-Za-z0-9._+-]{1,64}$/;
+// A profile names a directory under ~/.dsh/profiles; "." and ".." would step
+// out of it and must not pass as a name.
+const isProfileName = (value) => PROFILE_PATTERN.test(value) && value !== '.' && value !== '..';
 
 // A .volatile() Config field is a stable reference read with get(); an absent or
 // plain value still works so the plugin runs before the settings service mounts.
@@ -46,6 +49,12 @@ export function toServer(row) {
     : (kind === 'systemd-user' || kind === 'launchd-user' ? 'dsh-web' : '');
   const rawProfile = typeof row.profile === 'string' ? row.profile.trim() : '';
   const rawChannel = typeof row.updateChannel === 'string' ? row.updateChannel.trim() : '';
+  // Settings sync is configurable per row: which local profile to mirror,
+  // which credential keys to copy (empty means every top-level key), and
+  // whether AGENTS.md / the patch layer travel. The script validates again.
+  const rawSource = typeof row.syncSourceProfile === 'string' ? row.syncSourceProfile.trim() : '';
+  const syncSourceProfile = isProfileName(rawSource) ? rawSource : 'desktop';
+  const syncKeys = typeof row.syncKeys === 'string' ? row.syncKeys.trim().slice(0, 500) : '';
   // Space-separated package specs installed on first provisioning; the script
   // validates each spec again before touching the remote profile.
   const bundles = typeof row.bundles === 'string' ? row.bundles.trim().slice(0, 500) : '';
@@ -59,8 +68,12 @@ export function toServer(row) {
     remoteLog: typeof row.remoteLog === 'string' ? row.remoteLog.trim() : '',
     serviceKind: kind,
     serviceUnit: unit,
-    profile: PROFILE_PATTERN.test(rawProfile) ? rawProfile : 'web',
+    profile: isProfileName(rawProfile) ? rawProfile : 'web',
     updateChannel: CHANNEL_PATTERN.test(rawChannel) ? rawChannel : '',
+    syncSourceProfile,
+    syncKeys,
+    syncAgents: row.syncAgents !== false,
+    syncPatch: row.syncPatch !== false,
     bundles,
     // Sidebar visibility is a config choice so a configured host can stay out
     // of the left column without being deleted.

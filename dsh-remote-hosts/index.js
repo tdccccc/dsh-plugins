@@ -55,6 +55,12 @@ export const Config = Schema.object({
     serviceUnit: Schema.string().default(''),
     profile: Schema.string().default(''),
     updateChannel: Schema.string().default(''),
+    // Settings sync content; empty source means desktop and empty keys means
+    // every top-level credential the local file declares.
+    syncSourceProfile: Schema.string().default(''),
+    syncKeys: Schema.string().default(''),
+    syncAgents: Schema.boolean().default(true),
+    syncPatch: Schema.boolean().default(true),
     // Space-separated dsh profile bundles installed by the provision action.
     bundles: Schema.string().default(''),
     sidebar: Schema.boolean().default(true),
@@ -88,6 +94,10 @@ export const Config = Schema.object({
       serviceUnit: 'systemd unit or launchd label that runs the remote dsh web (default dsh-web).',
       profile: 'Remote dsh profile directory under ~/.dsh/profiles (default web).',
       updateChannel: 'Update target: empty mirrors this app version, otherwise an npm dist-tag (latest, next) or an exact version.',
+      syncSourceProfile: 'Local profile directory under ~/.dsh/profiles to mirror onto this host (default desktop).',
+      syncKeys: 'Comma- or space-separated credential keys to copy; empty copies every top-level key in ~/.dsh/.credentials.yaml.',
+      syncAgents: 'Copy ~/.dsh/AGENTS.md to the remote profile (default true).',
+      syncPatch: 'Copy the source profile patch layer to the remote profile (default true).',
       bundles: 'Space-separated dsh profile bundles provisioned with the host, for example "@deepseek-ai/dsh-experimental-plugin-market-bundle dsh-context@0.78.0".',
       sidebar: 'Show this host as a row in the left sidebar. Hidden hosts stay configured and can be opened from the plugin settings or the overlay switcher.',
     },
@@ -109,6 +119,10 @@ export const Config = Schema.object({
       serviceUnit: '运行远端 dsh web 的 systemd unit 或 launchd label（默认 dsh-web）。',
       profile: '远端 dsh profile 目录名，位于 ~/.dsh/profiles 下（默认 web）。',
       updateChannel: '更新目标：留空跟随本机应用版本，否则填 npm dist-tag（latest、next）或精确版本号。',
+      syncSourceProfile: '要镜像到该主机的本地 profile 目录（位于 ~/.dsh/profiles 下，默认 desktop）。',
+      syncKeys: '要同步的凭据 key，逗号或空格分隔；留空同步 ~/.dsh/.credentials.yaml 中所有顶层 key。',
+      syncAgents: '把 ~/.dsh/AGENTS.md 同步到远端 profile（默认开启）。',
+      syncPatch: '把来源 profile 的 patch 层同步到远端 profile（默认开启）。',
       bundles: '首次部署时安装的 dsh profile bundles，空格分隔，例如 "@deepseek-ai/dsh-experimental-plugin-market-bundle dsh-context@0.78.0"。',
       sidebar: '在左侧栏显示该主机。隐藏后配置仍然保留，可从插件设置或浮层切换器打开。',
     },
@@ -766,6 +780,12 @@ export function apply(ctx, config) {
         args.push('--port', String(server.remotePort), '--profile', server.profile, '--kind', server.serviceKind);
         if (server.serviceUnit) args.push('--unit', server.serviceUnit);
       }
+      // What travels is a per-row choice; the script validates the names again
+      // before it reads or copies anything.
+      args.push('--source-profile', server.syncSourceProfile);
+      if (server.syncKeys) args.push('--keys', server.syncKeys);
+      if (server.syncAgents === false) args.push('--no-agents');
+      if (server.syncPatch === false) args.push('--no-patch');
       // --dry-run stops before any copy or restart, so it wins over --restart.
       if (dryRun) args.push('--dry-run');
       else if (restart) args.push('--restart');
