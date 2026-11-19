@@ -258,7 +258,16 @@ DSH_SSH_OPTIONS='-o ProxyJump=user@jump -o Port=2222' bin/remote.sh user@host pr
 ```
 
 `provision.sh` is the only script that installs a remote from scratch; sync and
-update assume the service already exists. It needs sudo-free SSH, `curl`,
+update assume the service already exists. The generated `dsh-web` launcher
+does not pin `DSH_PERMISSION_MODE`, so the profile's permission preset
+(`workspace-write` in the default patch) survives updates and restarts. A host
+that needs full access must set `DSH_PERMISSION_MODE=danger-full-access` in its
+unit environment. Existing hosts provisioned by older versions still carry the
+old default in `~/.local/bin/dsh-web`; remove that `export` line once
+(`sed -i '/^export DSH_PERMISSION_MODE=/d' ~/.local/bin/dsh-web`) or
+re-provision with `--force`.
+
+It needs sudo-free SSH, `curl`,
 `tar` and `sha256sum` on the remote, and only handles `systemd-user` hosts
 (launchd or externally managed units keep their manual setup). It installs Node under
 `~/.local/node/v<version>` and never touches a system Node.

@@ -191,7 +191,9 @@ if [ -z "\${DEEPSEEK_API_KEY:-}" ]; then
   DEEPSEEK_API_KEY=$(grep -m1 'DEEPSEEK_API_KEY' "\$HOME/.dsh/.credentials.yaml" 2>/dev/null | sed -E 's/.*DEEPSEEK_API_KEY: *//')
   export DEEPSEEK_API_KEY
 fi
-export DSH_PERMISSION_MODE="\${DSH_PERMISSION_MODE:-danger-full-access}"
+# Do not pin a permission mode here: the profile's permission preset (and the
+# UI) should survive an update or restart. A host that needs full access can set
+# DSH_PERMISSION_MODE explicitly in its unit environment.
 exec "\$HOME/.local/bin/dsh" --profile "$PROFILE" --port "$PORT" --no-open "\$@"
 LAUNCHER
 chmod +x "$HOME/.local/bin/dsh" "$HOME/.local/bin/dsh-web"

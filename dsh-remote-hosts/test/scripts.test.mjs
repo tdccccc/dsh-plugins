@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,12 @@ test('every shell script parses', async () => {
     const result = await run(['-n', script(name)]);
     assert.equal(result.code, 0, name + ': ' + result.stderr);
   }
+});
+
+test('provisioning leaves the permission mode to the profile', () => {
+  const source = readFileSync(script('provision.sh'), 'utf8');
+  assert.doesNotMatch(source, /danger-full-access/);
+  assert.doesNotMatch(source, /export DSH_PERMISSION_MODE/);
 });
 
 test('scripts reject bad arguments before touching ssh', async () => {
